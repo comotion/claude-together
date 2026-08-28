@@ -4,12 +4,12 @@ import { T } from './theme'
 import { CTA, Features, Hook, HowItWorks, Invite, Problem } from './scenes'
 
 const SCENES: Array<[React.FC, number]> = [
-  [Hook, 180],
-  [Problem, 300],
-  [Invite, 390],
-  [HowItWorks, 620],
-  [Features, 330],
-  [CTA, 280]
+  [Hook, 75],
+  [Problem, 90],
+  [Invite, 165],
+  [HowItWorks, 240],
+  [Features, 150],
+  [CTA, 180]
 ]
 
 const TOTAL = SCENES.reduce((sum, [, d]) => sum + d, 0)
