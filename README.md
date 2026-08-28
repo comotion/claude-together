@@ -22,9 +22,9 @@ Noise-encrypted sockets. Exposed to Claude as an [MCP](https://modelcontextproto
 
 ### ▶ 30-second explainer
 
-[![Watch the Claude Together explainer](docs/poster.png)](docs/explainer.mp4?raw=true)
+![Claude Together explainer](docs/explainer.gif)
 
-*Click to watch. Source lives in [`video/`](video) — a Remotion project, `npm run render` rebuilds it.*
+*[Full-quality MP4](https://github.com/wybe-labs/claude-together/blob/main/docs/explainer.mp4)*
 
 ## Install (each person, ~2 minutes)
 
