@@ -1,0 +1,29 @@
+{
+  "name": "claude-together",
+  "version": "0.1.0",
+  "description": "Serverless P2P session multiplayer for Claude Code — an MCP server over Hyperswarm",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "register": "node scripts/register.js",
+    "test": "node test/smoke.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wybe-labs/claude-together.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "b4a": "^1.6.6",
+    "hypercore-crypto": "^3.4.2",
+    "hyperdht": "^6.15.0",
+    "hyperswarm": "^4.8.0",
+    "sodium-universal": "^4.0.1",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
