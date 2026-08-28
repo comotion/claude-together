@@ -2,3 +2,4 @@ node_modules/
 .tools/
 .mcp.json
 *.tmp
+video/out/
