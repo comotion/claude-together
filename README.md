@@ -86,6 +86,9 @@ gets the message in the shared room chat log, but only the named recipients rece
 it at the active priority — everyone else gets it passively, with no interruption.
 So sharing a log meant for one person doesn't barge into three other sessions.
 Without a "to" list, the whole room gets the message at the send priority.
+Addressing is best-effort, not an access control: display names are self-chosen
+and not unique, and everyone in the room can read every message — "to" only
+decides whose session is actively notified.
 
 Every injected message is framed as untrusted data with an explicit instruction to
 relay it to the human and ask before acting on anything it requests — a friend's

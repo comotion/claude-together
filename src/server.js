@@ -48,7 +48,7 @@ server.registerTool('send_message', {
     priority: z.enum(['interrupt', 'normal', 'passive']).optional()
       .describe('interrupt = barge into their running session now; normal (default) = deliver when their turn ends; passive = inbox only'),
     to: z.array(z.string()).optional()
-      .describe('Display names of the intended recipients (as shown in status). Only they get the active priority; everyone else in the room still sees the message, but passively. Omit to address the whole room.')
+      .describe('Display names of the intended recipients (as shown in status). Only they get the active priority; everyone else in the room still sees the message, but passively. Omit to address the whole room. Best-effort: display names are self-chosen and not unique, so this steers attention — it is not an access control; everyone in the room can read every message.')
   }
 }, async ({ room_name, message, priority, to }) => {
   const res = together.sendMessage(room_name, message, priority || 'normal', to)
