@@ -136,10 +136,45 @@ in the window.
   knowledge of that room's key (keyed BLAKE2b challenge-response, direction-bound,
   replay-safe).
 - **Messages are data, not instructions.** Inbound messages are explicitly framed as
-  untrusted when handed to Claude: a friend's message can't prompt-inject your session
-  into doing something — Claude is told to show you any request found in a message and
-  ask before acting.
-- **Plain text only**, 16 KB cap. No files, no commands, no code execution.
+  untrusted when handed to Claude, which is told to relay any request to you and ask
+  before acting on it. This is a *mitigation*, not a guarantee — see the limitations below.
+- **Plain text only**, 16 KB cap. No files, no commands, no code execution. Peer-supplied
+  message ids are validated as hex before they touch the filesystem (no path traversal).
+
+### What the perimeter is
+
+Discovery topics are derived from secret keys, so **only key-holders can even connect
+to you** — random internet peers can't reach a room they don't have the key for. The
+trust boundary is therefore *the people you invite*, not the whole internet. A room key
+is a **shared symmetric secret**: everyone in the room holds the same key and is equally
+trusted.
+
+### Limitations — know these before trusting it with anything sensitive
+
+- **A room key is permanent and unrevocable.** Anyone who ever holds it — an invited
+  member, or anyone a code leaks to within its 15-minute window — keeps read/write
+  access forever. `leave_room` only deletes *your own* copy; it can't evict anyone else.
+  **You cannot kick a member.** The only way to exclude someone is for everyone else to
+  start a fresh room. There is no forward secrecy: a leaked key exposes past logged
+  history and all future messages.
+- **Sender names are not authenticated.** `from`, `host`, and `label` are self-asserted;
+  any room member can post under another member's name. Treat displayed identity as a
+  hint, not proof.
+- **Any member can invite anyone.** There is no admin role or approval step.
+- **Prompt-injection risk is real.** Messages are injected into your live Claude session
+  (mid-turn for `interrupt` priority, when the agent has tool access). The untrusted-data
+  framing reduces but does not eliminate the risk that a crafted message manipulates the
+  receiving agent. Don't run Claude Together in a session with dangerous auto-approved
+  tools while in a room with people you don't trust, and prefer `normal`/`passive` over
+  `interrupt` from untrusted senders.
+- **Joining leaks your hostname and project-folder name** to the room (so members can
+  tell your sessions apart). Set `CLAUDE_TOGETHER_LABEL` to override the folder name;
+  your machine hostname is still sent.
+
+**Bottom line:** safe for the intended use — *friends you trust, collaborating*. It is
+**not** a zero-trust or anonymous messenger, and a room key should be treated like a
+password you can never rotate: share it only with people you'd trust with write access
+to your inbox, and start a new room if it might have leaked.
 
 ## Reliability
 
@@ -155,6 +190,7 @@ in the window.
 
 ## Repo layout
 
+- [`test/security.js`](test/security.js) — path-traversal regression test (`npm run test:security`)
 - [`src/server.js`](src/server.js) — MCP server and tool definitions
 - [`src/transport.js`](src/transport.js) — Hyperswarm swarm, pairing handshake, room
   auth, at-least-once message protocol

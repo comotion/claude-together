@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "register": "node scripts/register.js",
     "test": "node test/smoke.js",
+    "test:security": "node test/security.js",
     "test:live": "node test/live.js"
   },
   "repository": {

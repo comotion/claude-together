@@ -402,7 +402,10 @@ export class Together extends EventEmitter {
         const roomId = String(msg.roomId || '')
         if (!state.rooms.has(roomId)) return
         const id = String(msg.id || '')
-        if (!id) return
+        // The id is peer-chosen and becomes a filename in the store (inbox/<id>.json,
+        // log keys, seen log). Accept only our own id shape — hex, bounded length —
+        // so a malicious peer can't path-traverse out of the store directory.
+        if (!/^[0-9a-f]{1,32}$/.test(id)) return
         this._send(conn, { t: 'ack', id })
         if (this.store.hasSeen(id)) return
         this.store.markSeen(id)

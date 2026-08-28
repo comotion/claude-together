@@ -30,6 +30,11 @@ export class Store {
 
   _file (...p) { return path.join(this.dir, ...p) }
 
+  // Message and room ids become filenames. Only our own id shape is allowed, so a
+  // peer-supplied id can never path-traverse out of the store. Callers validate too
+  // (defence in depth) — this is the last line before the filesystem.
+  _safeId (id) { return typeof id === 'string' && /^[0-9a-f]{1,64}$/.test(id) }
+
   _readJson (file, fallback) {
     try { return JSON.parse(fs.readFileSync(this._file(file), 'utf8')) } catch { return fallback }
   }
@@ -107,7 +112,7 @@ export class Store {
   }
 
   markSeen (id) {
-    if (this._seen.has(id)) return
+    if (!this._safeId(id) || this._seen.has(id)) return
     this._seen.add(id)
     fs.appendFileSync(this._file('seen.jsonl'), id + '\n')
   }
@@ -115,6 +120,7 @@ export class Store {
   // --- outbox: file per message, deleted on first ack ---
 
   enqueueOutbound (msg) {
+    if (!this._safeId(msg.id)) return
     this._writeJson(path.join('outbox', msg.id + '.json'), msg)
   }
 
@@ -142,6 +148,7 @@ export class Store {
   // --- inbox: file per message, deleted when the user reads it ---
 
   pushInbound (msg) {
+    if (!this._safeId(msg.id)) return
     this._writeJson(path.join('inbox', msg.id + '.json'), msg)
   }
 
@@ -174,6 +181,7 @@ export class Store {
   // --- room history log: what makes offline delivery work through friends ---
 
   appendLog (msg) {
+    if (!this._safeId(msg.roomId) || !this._safeId(msg.id)) return
     fs.appendFileSync(this._file('log', msg.roomId + '.jsonl'), JSON.stringify(msg) + '\n')
     this._maybeTrim(msg.roomId)
   }
