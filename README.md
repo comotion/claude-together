@@ -20,6 +20,12 @@ Built on [Hyperswarm](https://github.com/holepunchto/hyperswarm): peers find eac
 through a public BitTorrent-style DHT, hole-punch a direct UDP connection, and talk over
 Noise-encrypted sockets. Exposed to Claude as an [MCP](https://modelcontextprotocol.io) server.
 
+### ▶ 30-second explainer
+
+[![Watch the Claude Together explainer](docs/poster.png)](docs/explainer.mp4?raw=true)
+
+*Click to watch. Source lives in [`video/`](video) — a Remotion project, `npm run render` rebuilds it.*
+
 ## Install (each person, ~2 minutes)
 
 Requires [Node.js](https://nodejs.org) ≥ 18 and [Claude Code](https://claude.com/claude-code).
