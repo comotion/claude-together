@@ -6,6 +6,11 @@ import b4a from 'b4a'
 const LOG_REPLAY_MAX = 200
 const LOG_REPLAY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const LOG_TRIM_AT = 600
+// Dedup only needs to remember ids as long as they can still be replayed to us
+// (the log replay window, times a handful of rooms). MAX_SEEN is far above that,
+// so bounding it can't cause a real duplicate; it just caps memory and disk.
+const MAX_SEEN = 20_000
+const SEEN_COMPACT_AT = 60_000
 
 // Multi-process-safe persistence. Several Claude Code sessions may each run their own
 // server instance against this same directory, so everything is either append-only
@@ -25,7 +30,13 @@ export class Store {
       fs.mkdirSync(path.join(this.dir, d), { recursive: true })
     }
     this._migrate()
-    this._seen = new Set(this._readLines('seen.jsonl'))
+    // Load the tail of the seen log into an insertion-ordered Set (a JS Set iterates
+    // in insertion order, so the oldest id is always values().next()). Only the last
+    // MAX_SEEN survive, bounding memory even if a legacy file grew huge.
+    const lines = this._readLines('seen.jsonl')
+    this._seen = new Set(lines.slice(-MAX_SEEN))
+    this._seenAppends = lines.length // triggers compaction if the file is oversized
+    if (this._seenAppends > SEEN_COMPACT_AT) this._compactSeen()
   }
 
   _file (...p) { return path.join(this.dir, ...p) }
@@ -103,18 +114,31 @@ export class Store {
 
   // --- dedup ---
 
-  hasSeen (id) {
-    if (this._seen.has(id)) return true
-    // Another instance on this machine may have ingested it after we loaded.
-    const fresh = this._readLines('seen.jsonl')
-    if (fresh.length !== this._seen.size) this._seen = new Set(fresh)
-    return this._seen.has(id)
-  }
+  // O(1), pure memory. Cross-process consistency isn't needed here: duplicate inbox
+  // writes are idempotent (keyed by id) and replay dedups by id on the receiver, so a
+  // second local session re-ingesting is harmless. This set only stops THIS process
+  // re-emitting the same message (e.g. gossiped from two peers).
+  hasSeen (id) { return this._seen.has(id) }
 
   markSeen (id) {
     if (!this._safeId(id) || this._seen.has(id)) return
     this._seen.add(id)
     fs.appendFileSync(this._file('seen.jsonl'), id + '\n')
+    this._seenAppends++
+    if (this._seen.size > MAX_SEEN) {
+      // Evict the oldest id (first in insertion order) to bound memory.
+      this._seen.delete(this._seen.values().next().value)
+    }
+    if (this._seenAppends >= SEEN_COMPACT_AT) this._compactSeen()
+  }
+
+  // Rewrite seen.jsonl with only the currently-retained ids, collapsing an append log
+  // that has grown past SEEN_COMPACT_AT back down to the working set.
+  _compactSeen () {
+    const tmp = this._file('seen.jsonl.' + process.pid + '.tmp')
+    fs.writeFileSync(tmp, [...this._seen].map(id => id + '\n').join(''))
+    fs.renameSync(tmp, this._file('seen.jsonl'))
+    this._seenAppends = this._seen.size
   }
 
   // --- outbox: file per message, deleted on first ack ---

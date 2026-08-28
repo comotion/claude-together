@@ -12,6 +12,10 @@ import {
 const AUTH_TIMEOUT_MS = 30_000
 const PAIR_TIMEOUT_MS = 90_000
 const INVITE_TTL_MS = 15 * 60_000
+// Largest single newline-delimited frame we'll buffer from a peer. The biggest
+// legitimate frame is one 16 KB message plus its base64/JSON envelope; 256 KB is
+// generous headroom while still bounding a flood.
+const MAX_LINE_BYTES = 256 * 1024
 
 function roomIdFor (roomKey) {
   return b4a.toString(derive(roomKey, 'claude-together-roomid').subarray(0, 8), 'hex')
@@ -221,6 +225,14 @@ export class Together extends EventEmitter {
 
     conn.on('data', data => {
       state.buf += b4a.toString(data)
+      // Cap the unparsed line. Our largest legit frame is a 16 KB message plus
+      // envelope; a peer that streams past MAX_LINE_BYTES without a newline is
+      // trying to exhaust memory — drop it rather than buffer unboundedly.
+      if (state.buf.length > MAX_LINE_BYTES) {
+        this.emit('warning', new Error('peer exceeded max line length; dropping connection'))
+        conn.destroy()
+        return
+      }
       let idx
       while ((idx = state.buf.indexOf('\n')) !== -1) {
         const line = state.buf.slice(0, idx)

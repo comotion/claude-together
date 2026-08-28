@@ -41,7 +41,40 @@ const drained = store.drainInbound()
 assert.ok(drained.some(m => m.id === goodId), 'valid message was dropped')
 console.log('   valid message stored and drained')
 
+console.log('3. seen.jsonl stays bounded under a flood…')
+// Import the constants indirectly by flooding well past the cap and checking the set
+// and file both stay bounded (compaction fires).
+let hx = 0
+const hexId = () => (hx++).toString(16).padStart(12, '0')
+const floodDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-flood-'))
+const s2 = new Store(floodDir)
+let lastId
+for (let i = 0; i < 70_000; i++) { lastId = hexId(); s2.markSeen(lastId) }
+const seenLines = fs.readFileSync(path.join(floodDir, 'seen.jsonl'), 'utf8').split('\n').filter(Boolean).length
+assert.ok(s2._seen.size <= 20_000, `in-memory seen set unbounded: ${s2._seen.size}`)
+assert.ok(seenLines <= 60_000, `seen.jsonl not compacted: ${seenLines} lines`)
+assert.equal(s2.hasSeen(lastId), true, 'recently-seen id was forgotten')       // recent kept
+assert.equal(s2.hasSeen('000000000000'), false, 'oldest id should have been evicted') // oldest gone
+console.log(`   set=${s2._seen.size} (≤20k), file=${seenLines} lines (≤60k)`)
+
+console.log('4. Oversized peer frame is rejected, not buffered…')
+// A minimal fake connection: capture writes, feed a giant newline-less chunk.
+const { Together } = await import('../src/transport.js')
+const t = new Together({ store: new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'ct-buf-'))) })
+let destroyed = false
+const fakeConn = {
+  _handlers: {},
+  on (ev, fn) { this._handlers[ev] = fn },
+  write () {},
+  destroy () { destroyed = true }
+}
+t._onConnection(fakeConn)
+fakeConn._handlers.data(Buffer.from('x'.repeat(300 * 1024))) // > MAX_LINE_BYTES, no newline
+assert.equal(destroyed, true, 'connection not dropped on oversized frame')
+console.log('   connection dropped on 300 KB newline-less flood')
+
 fs.rmSync(canary, { force: true })
 fs.rmSync(dir, { recursive: true, force: true })
+fs.rmSync(floodDir, { recursive: true, force: true })
 console.log('\nSecurity tests passed.')
 process.exit(0)
