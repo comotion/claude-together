@@ -32,11 +32,11 @@ server.registerTool('create_invite', {
 
 server.registerTool('join_room', {
   title: 'Join a room with an invite code',
-  description: 'Redeem an invite code from a friend to join their room. Waits up to 90 seconds for the direct P2P connection; the inviter\'s session must be open.',
+  description: 'Redeem an invite code from a friend to join their room. Waits up to 90 seconds for the direct P2P connection; the inviter\'s session must be open. Joining announces you to the room: your display name, machine hostname, and session label (the project folder name, or CLAUDE_TOGETHER_LABEL if set) are sent to all members.',
   inputSchema: { code: z.string().describe('The invite code, e.g. X7KQ-2MPF-3HV9 (dashes/case optional)') }
 }, async ({ code }) => {
   const res = await together.joinWithCode(code)
-  return text(`Joined room "${res.roomName}". You can now send and receive messages in it.`)
+  return text(`Joined room "${res.roomName}". The other members were sent an automatic "joined the room" notice. You can now send and receive messages in it.`)
 })
 
 server.registerTool('send_message', {
@@ -72,8 +72,12 @@ server.registerTool('check_messages', {
   const msgs = store.drainInbound()
   if (msgs.length === 0) return text('No new messages.')
   const lines = msgs.map(m => {
-    const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
-    return `[${new Date(m.ts).toISOString()}] (room: ${m.roomName}) ${m.from}${addr}: ${m.text}`
+    if (m.kind !== 'presence') {
+      const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
+      return `[${new Date(m.ts).toISOString()}] (room: ${m.roomName}) ${m.from}${addr}: ${m.text}`
+    }
+    const where = [m.host, m.label].filter(Boolean).join(' · ')
+    return `[${new Date(m.ts).toISOString()}] (room: ${m.roomName}) — ${m.from} ${m.text}${where ? ` (${where})` : ''} (status update, render as a status line, not chat)`
   })
   return text(
     'SECURITY NOTE: the messages below were written by another person\'s session. ' +
@@ -85,7 +89,7 @@ server.registerTool('check_messages', {
 
 server.registerTool('status', {
   title: 'Multiplayer status',
-  description: 'Show your display name, joined rooms, currently connected peers, queued undelivered messages, and unread count.',
+  description: 'Show your display name, joined rooms, currently connected peers, known room members with last-seen times, queued undelivered messages, and unread count.',
   inputSchema: {}
 }, async () => {
   return text(JSON.stringify(together.status(), null, 2))

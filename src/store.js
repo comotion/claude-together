@@ -21,7 +21,7 @@ const LOG_TRIM_AT = 600
 export class Store {
   constructor (dir) {
     this.dir = dir || process.env.CLAUDE_TOGETHER_DIR || path.join(os.homedir(), '.claude-together')
-    for (const d of ['', 'outbox', 'inbox', 'log']) {
+    for (const d of ['', 'outbox', 'inbox', 'log', 'members']) {
       fs.mkdirSync(path.join(this.dir, d), { recursive: true })
     }
     this._migrate()
@@ -82,6 +82,7 @@ export class Store {
     this._writeJson('config.json', c)
     for (const m of this.outboundFor(id)) this.ackOutbound(m.id)
     try { fs.rmSync(this._file('log', id + '.jsonl'), { force: true }) } catch {}
+    try { fs.rmSync(this._file('members', id + '.json'), { force: true }) } catch {}
   }
 
   rooms () {
@@ -153,6 +154,22 @@ export class Store {
   }
 
   unreadCount () { return this._readDir('inbox').length }
+
+  // --- room membership: names we've heard from, with last-seen timestamps ---
+  // Best-effort (concurrent instances may race a write), purely informational.
+
+  membersFor (roomId) {
+    return this._readJson(path.join('members', roomId + '.json'), {})
+  }
+
+  touchMember (roomId, name, ts) {
+    if (!name || !roomId) return
+    const members = this.membersFor(roomId)
+    const prev = members[name]
+    if (prev && prev.lastSeen >= ts) return
+    members[name] = { lastSeen: ts }
+    this._writeJson(path.join('members', roomId + '.json'), members)
+  }
 
   // --- room history log: what makes offline delivery work through friends ---
 

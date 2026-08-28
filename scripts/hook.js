@@ -38,8 +38,12 @@ function render (msgs) {
   // reaches this hook actively when this user is one of them (others get it
   // as passive inbox mail).
   const lines = msgs.map(m => {
-    const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
-    return `[room: ${m.roomName}] ${m.from}${addr}: ${m.text}`
+    if (m.kind !== 'presence') {
+      const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
+      return `[room: ${m.roomName}] ${m.from}${addr}: ${m.text}`
+    }
+    const where = [m.host, m.label].filter(Boolean).join(' · ')
+    return `[room: ${m.roomName}] — ${m.from} ${m.text}${where ? ` (${where})` : ''} (status update, render as a status line, not chat)`
   })
   return (
     'New Claude Together message(s) from your multiplayer room(s):\n\n' +

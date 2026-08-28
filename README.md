@@ -22,9 +22,9 @@ Noise-encrypted sockets. Exposed to Claude as an [MCP](https://modelcontextproto
 
 ### ▶ 30-second explainer
 
-[![Watch the Claude Together explainer](docs/poster.png)](docs/explainer.mp4?raw=true)
+![Claude Together explainer](docs/explainer.gif)
 
-*Click to watch. Source lives in [`video/`](video) — a Remotion project, `npm run render` rebuilds it.*
+*[Full-quality MP4](https://github.com/wybe-labs/claude-together/blob/main/docs/explainer.mp4)*
 
 ## Install (each person, ~2 minutes)
 
@@ -54,17 +54,17 @@ natural language — both end up calling the same MCP tools.
 | `/together-send bug-hunt to alice: here's that stack trace` | address specific people — only they get active delivery |
 | `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session |
 | `/together-inbox` | check new + passive messages |
-| `/together-status` | rooms, peers, queues |
+| `/together-status` | rooms, peers, members + last seen, queues |
 
 Or just talk to Claude in any session:
 
 | You say | What happens |
 |---|---|
 | "create an invite for room `name`" | Creates the room, prints a short single-use code (15 min TTL). Keep your session open until your friend joins. |
-| "join room `X7KQ-2MPF-3HV9`" | Redeems a code from a friend; pairs in a few seconds. |
+| "join room `X7KQ-2MPF-3HV9`" | Redeems a code from a friend; pairs in a few seconds. Everyone already in the room automatically gets a "`name` joined the room (`hostname` · `session label`)" notice — even members who are offline see it when they reconnect. The label defaults to your project folder name; set `CLAUDE_TOGETHER_LABEL` to override it. |
 | "send to `name`: …" | Delivers instantly if they're online, otherwise queues on disk and delivers when you're both online. |
 | "check my messages" | Fetches everything unread, across all rooms. |
-| "multiplayer status" | Rooms, connected peers, queued/unread counts. |
+| "multiplayer status" | Rooms, connected peers, known members with last-seen times, queued/unread counts. |
 | "set my display name to …" | The name shown on your messages. |
 | "leave room `name`" | Deletes the room key locally. |
 

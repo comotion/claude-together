@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import os from 'node:os'
+import path from 'node:path'
 import Hyperswarm from 'hyperswarm'
 import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
@@ -32,6 +33,16 @@ function sanitizeTo (to) {
     if (out.length >= 32) break
   }
   return out.length ? out : undefined
+}
+
+// A human-readable tag for THIS session, sent along with join announcements so
+// peers can tell which of your sessions joined. Claude Code launches MCP servers
+// in the project directory, so the folder name is a good default; override with
+// CLAUDE_TOGETHER_LABEL.
+function sessionLabel () {
+  if (process.env.CLAUDE_TOGETHER_LABEL) return process.env.CLAUDE_TOGETHER_LABEL.slice(0, 64)
+  const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd()
+  return path.basename(dir).slice(0, 64)
 }
 
 // P2P layer. One Hyperswarm instance; every room is a DHT topic derived from its
@@ -228,6 +239,7 @@ export class Together extends EventEmitter {
       this.conns.delete(conn)
       for (const roomId of state.rooms) {
         this.roomConns.get(roomId)?.delete(conn)
+        if (state.peerName) this.store.touchMember(roomId, state.peerName, Date.now())
         this.emit('peer-left', { roomId, name: state.peerName })
       }
       state.rooms.clear()
@@ -332,6 +344,7 @@ export class Together extends EventEmitter {
         const roomId = String(msg.roomId || '')
         if (!state.rooms.has(roomId)) return
         state.peerName = String(msg.name || 'unknown').slice(0, 64)
+        this.store.touchMember(roomId, state.peerName, Date.now())
         this.emit('peer-joined', { roomId, name: state.peerName })
         break
       }
@@ -347,6 +360,7 @@ export class Together extends EventEmitter {
         const grant = JSON.parse(b4a.toString(plain))
         const roomKey = b4a.from(grant.roomKey, 'base64')
         const roomId = roomIdFor(roomKey)
+        const alreadyMember = this.store.rooms().some(r => r.id === roomId)
         this.store.addRoom(roomId, grant.roomName, roomKey)
         this._joinTopic(topicFor(roomKey, 'room'))
         this._send(conn, { t: 'grant-ack', id: hex })
@@ -357,6 +371,18 @@ export class Together extends EventEmitter {
         // Prove the new room key on all live connections — including this one,
         // which hyperswarm will reuse for the room (one socket per peer).
         this._reproveAll()
+        // Announce ourselves to the room through the normal message path: it sits
+        // in the outbox now and replays as soon as the room context is proven, and
+        // it queues/gossips for members who are currently offline.
+        if (!alreadyMember) {
+          this._broadcast(roomId, {
+            text: 'joined the room',
+            priority: 'normal',
+            kind: 'presence',
+            host: os.hostname().slice(0, 64),
+            label: sessionLabel()
+          })
+        }
         join.resolve({ roomId, roomName: grant.roomName })
         break
       }
@@ -394,7 +420,10 @@ export class Together extends EventEmitter {
           from: String(msg.from || state.peerName || 'unknown').slice(0, 64),
           text: String(msg.text || '').slice(0, 16384),
           ts,
-          priority
+          priority,
+          kind: msg.kind === 'presence' ? 'presence' : 'chat',
+          ...(msg.host ? { host: String(msg.host).slice(0, 64) } : {}),
+          ...(msg.label ? { label: String(msg.label).slice(0, 64) } : {})
         }
         if (to) relay.to = to
         // Local delivery: an addressed message lands actively only for the named
@@ -406,6 +435,7 @@ export class Together extends EventEmitter {
         // session now — urgency expires.
         if (localPriority === 'interrupt' && Date.now() - ts > 5 * 60_000) localPriority = 'normal'
         const inbound = { ...relay, priority: localPriority }
+        this.store.touchMember(roomId, inbound.from, ts)
         this.store.pushInbound(inbound)
         this.store.appendLog(relay)
         // Forward to other live peers in the room — heals meshes where two members
@@ -431,21 +461,29 @@ export class Together extends EventEmitter {
     const room = this.store.roomByName(roomName)
     if (!room) throw new Error(`No room named "${roomName}". Rooms: ${this.store.rooms().map(r => r.name).join(', ') || '(none)'}`)
     if (!['interrupt', 'normal', 'passive'].includes(priority)) priority = 'normal'
-    to = sanitizeTo(to)
+    return this._broadcast(room.id, { text, priority, kind: 'chat', to: sanitizeTo(to) })
+  }
+
+  // Shared send path for chat and presence: outbox until acked, room log for
+  // offline catch-up through friends, immediate fan-out to live peers.
+  _broadcast (roomId, { text, priority, kind, host, label, to }) {
     const msgId = b4a.toString(hash(randomBytes(16)).subarray(0, 12), 'hex')
     const msg = {
       id: msgId,
-      roomId: room.id,
+      roomId,
       from: this.store.getName(),
       text: String(text).slice(0, 16384),
       ts: Date.now(),
-      priority
+      priority,
+      kind,
+      ...(host ? { host } : {}),
+      ...(label ? { label } : {})
     }
     if (to) msg.to = to
     this.store.markSeen(msgId) // never re-ingest our own message if echoed
     this.store.enqueueOutbound(msg)
     this.store.appendLog(msg)
-    const conns = this.roomConns.get(room.id) || new Set()
+    const conns = this.roomConns.get(roomId) || new Set()
     for (const conn of conns) this._send(conn, { t: 'msg', ...msg })
     const online = new Set([...conns].map(c => (c._ct?.peerName || '').toLowerCase()))
     return {
@@ -462,10 +500,19 @@ export class Together extends EventEmitter {
   status () {
     const rooms = this.store.rooms().map(r => {
       const conns = [...(this.roomConns.get(r.id) || [])]
+      const connectedPeers = conns.map(c => c._ct?.peerName || 'connecting…')
+      const members = Object.entries(this.store.membersFor(r.id))
+        .map(([name, m]) => ({
+          name,
+          online: connectedPeers.includes(name),
+          lastSeen: new Date(m.lastSeen).toISOString()
+        }))
+        .sort((a, b) => (b.online - a.online) || (b.lastSeen < a.lastSeen ? -1 : 1))
       return {
         name: r.name,
         id: r.id,
-        connectedPeers: conns.map(c => c._ct?.peerName || 'connecting…'),
+        connectedPeers,
+        members,
         pendingOutbound: this.store.outboundFor(r.id).length
       }
     })
