@@ -36,15 +36,13 @@ export class Together extends EventEmitter {
   }
 
   async start () {
-    let seed = this.store.getSeed()
-    if (!seed) {
-      seed = randomBytes(32)
-      this.store.setSeed(seed)
-    }
     if (!this.store.getName()) this.store.setName(os.userInfo().username)
 
+    // Ephemeral keypair per process: several sessions on one machine (or several of
+    // your machines) each show up as their own peer in the room mesh. Trust comes
+    // from room keys, not from this connection identity.
     this.swarm = new Hyperswarm({
-      keyPair: hypercoreCrypto.keyPair(seed),
+      keyPair: hypercoreCrypto.keyPair(),
       bootstrap: this.bootstrap
     })
     this.swarm.on('connection', conn => this._onConnection(conn))
@@ -52,11 +50,17 @@ export class Together extends EventEmitter {
     for (const room of this.store.rooms()) this._joinTopic(topicFor(room.key, 'room'))
 
     // Hyperswarm's own DHT re-query cadence is ~10 minutes; that's too slow for
-    // "my friend just came online". Nudge lookups for rooms with no live peers.
+    // "my friend just came online". Nudge lookups for rooms with no live peers,
+    // and pick up rooms another local session joined since we started.
     this._maintenance = setInterval(() => {
       for (const room of this.store.rooms()) {
-        if (this.roomConns.get(room.id)?.size) continue
         const hex = b4a.toString(topicFor(room.key, 'room'), 'hex')
+        if (!this.discoveries.has(hex)) {
+          this._joinTopic(topicFor(room.key, 'room'))
+          this._reproveAll()
+          continue
+        }
+        if (this.roomConns.get(room.id)?.size) continue
         this.discoveries.get(hex)?.refresh().catch(() => {})
       }
     }, 30_000)
@@ -268,9 +272,17 @@ export class Together extends EventEmitter {
             if (!this.roomConns.has(cand.id)) this.roomConns.set(cand.id, new Set())
             this.roomConns.get(cand.id).add(conn)
             this._send(conn, { t: 'hello', roomId: cand.id, name: this.store.getName() })
-            // At-least-once delivery: replay everything not yet acked for this room.
+            // At-least-once delivery: replay everything not yet acked for this room,
+            // then gossip recent room history. The peer dedups by message id, so this
+            // is how someone who was offline catches up through ANY member who was
+            // around — store-and-forward through friends, no server.
+            const replayed = new Set()
             for (const m of this.store.outboundFor(cand.id)) {
+              replayed.add(m.id)
               this._send(conn, { t: 'msg', ...m })
+            }
+            for (const m of this.store.logTail(cand.id)) {
+              if (!replayed.has(m.id)) this._send(conn, { t: 'msg', ...m })
             }
           } else {
             state.pairs.add(cand.id)
@@ -360,6 +372,12 @@ export class Together extends EventEmitter {
           ts: Number(msg.ts) || Date.now()
         }
         this.store.pushInbound(inbound)
+        this.store.appendLog(inbound)
+        // Forward to other live peers in the room — heals meshes where two members
+        // can't reach each other directly but both reach us. Dedup stops loops.
+        for (const other of this.roomConns.get(roomId) || []) {
+          if (other !== conn) this._send(other, { t: 'msg', ...inbound })
+        }
         this.emit('message', inbound)
         break
       }
@@ -387,6 +405,7 @@ export class Together extends EventEmitter {
     }
     this.store.markSeen(msgId) // never re-ingest our own message if echoed
     this.store.enqueueOutbound(msg)
+    this.store.appendLog(msg)
     const conns = this.roomConns.get(room.id) || new Set()
     for (const conn of conns) this._send(conn, { t: 'msg', ...msg })
     return { id: msgId, deliveredToPeers: conns.size, queued: conns.size === 0 }
@@ -408,7 +427,7 @@ export class Together extends EventEmitter {
       displayName: this.store.getName(),
       rooms,
       pendingInvites: this.pendingInvites.size,
-      unreadMessages: this.store.inbox.length
+      unreadMessages: this.store.unreadCount()
     }
   }
 }

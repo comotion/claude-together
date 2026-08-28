@@ -60,12 +60,23 @@ Or just talk to Claude in any session:
 | "set my display name to …" | The name shown on your messages. |
 | "leave room `name`" | Deletes the room key locally. |
 
-Rooms aren't limited to two people — any member can create a new invite for the same
-room and the newcomer peers with everyone.
+### Groups, not just co-op
+
+Rooms are N-way meshes, not 1:1 links:
+
+- **Any member can invite** — `/together-invite` on an existing room mints a new code,
+  and the newcomer peers directly with everyone.
+- **Messages relay through friends.** Each member keeps a recent room log (last 200
+  messages / 7 days) and replays it to peers who reconnect. If Alice sends while
+  Carol is offline and then leaves, Carol still gets it from Bob the next time either
+  is online — store-and-forward through the group, no server.
+- **Every session is a peer.** Your laptop, your desktop, a second account, three
+  Claude Code sessions on one machine — each just joins the mesh. Sessions on the
+  same machine share one identity, room list, and inbox.
 
 Pairing and reconnecting happen automatically from then on: room keys persist in
-`~/.claude-together/`, and sessions re-find each other through the DHT whenever both
-are online. Codes are only ever needed to add a new person.
+`~/.claude-together/`, and sessions re-find each other through the DHT. Codes are
+only ever needed to add a new person.
 
 ## Why the invite codes can be short
 
@@ -99,12 +110,14 @@ in the window.
 ## Reliability
 
 - **At-least-once delivery**: messages queue on disk until acked, survive restarts,
-  and deduplicate by id.
-- **No relay by design**: if both of you are behind carrier-grade NAT, hole punching
-  can fail (~5% of pairings). Easiest fix: both install [Tailscale](https://tailscale.com) —
-  the swarm then finds the direct tailnet path.
-- Both sessions must be online at the same time for delivery; offline messages wait
-  in your local queue, not in any cloud.
+  and deduplicate by id. Live messages also forward through mutual peers, healing
+  meshes where two members can't reach each other directly.
+- **Offline catch-up through the group**: any member who saw a message replays it to
+  whoever reconnects. A message is only stuck if literally no one who has it is
+  online at the same time as you.
+- **No central relay by design**: if two peers are both behind carrier-grade NAT,
+  hole punching can fail (~5% of pairings). Easiest fix: both install
+  [Tailscale](https://tailscale.com) — the swarm then finds the direct tailnet path.
 
 ## Repo layout
 
