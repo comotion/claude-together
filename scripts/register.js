@@ -5,9 +5,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { installHooks } from './install-hooks.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const server = path.join(root, 'src', 'server.js')
+
+try {
+  installHooks()
+  console.log('Delivery hooks installed (interrupt mid-turn / normal at turn end / passive inbox).')
+} catch (err) {
+  console.error(`Could not install delivery hooks: ${err.message}`)
+  console.error('Messages will still arrive, but only via /together-inbox.')
+}
 
 // Install the /together-* slash commands user-wide.
 const cmdSrc = path.join(root, 'commands')

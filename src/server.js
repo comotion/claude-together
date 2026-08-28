@@ -41,21 +41,24 @@ server.registerTool('join_room', {
 
 server.registerTool('send_message', {
   title: 'Send a message to a room',
-  description: 'Send a plain-text message to everyone in a room. If no peer is currently online, the message is queued locally and delivered automatically when the connection comes back.',
+  description: 'Send a plain-text message to everyone in a room. Priority controls how it lands in the recipients\' Claude sessions: "interrupt" is injected mid-turn at their next tool boundary (use sparingly — it barges in), "normal" (default) is delivered when their Claude finishes its current turn or they next prompt, "passive" just sits in their inbox until they check it. If no peer is online, the message queues locally and delivers on reconnect.',
   inputSchema: {
     room_name: z.string().describe('Room to send to'),
-    message: z.string().describe('Plain text message (no files or commands)')
+    message: z.string().describe('Plain text message (no files or commands)'),
+    priority: z.enum(['interrupt', 'normal', 'passive']).optional()
+      .describe('interrupt = barge into their running session now; normal (default) = deliver when their turn ends; passive = inbox only')
   }
-}, async ({ room_name, message }) => {
-  const res = together.sendMessage(room_name, message)
+}, async ({ room_name, message, priority }) => {
+  const res = together.sendMessage(room_name, message, priority || 'normal')
+  const how = priority === 'interrupt' ? ' (as an interruption)' : priority === 'passive' ? ' (passive, inbox only)' : ''
   return text(res.queued
-    ? 'No peer is online right now — message queued locally, will deliver when they reconnect.'
-    : `Delivered to ${res.deliveredToPeers} connected peer(s).`)
+    ? `No peer is online right now — message queued locally${how}, will deliver when they reconnect.`
+    : `Delivered to ${res.deliveredToPeers} connected peer(s)${how}.`)
 })
 
 server.registerTool('check_messages', {
   title: 'Check for new messages',
-  description: 'Fetch and clear all unread messages from all rooms. Call this periodically, or when the user asks what their friend said.',
+  description: 'Fetch and clear all unread messages from all rooms — including passive ones that are never auto-delivered. Interrupt/normal messages usually reach sessions automatically via the delivery hooks; use this when the user asks what their friends said, or to read passive mail.',
   inputSchema: {}
 }, async () => {
   const msgs = store.drainInbound()

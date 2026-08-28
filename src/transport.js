@@ -363,13 +363,19 @@ export class Together extends EventEmitter {
         if (this.store.hasSeen(id)) return
         this.store.markSeen(id)
         const room = this.store.rooms().find(r => r.id === roomId)
+        const ts = Number(msg.ts) || Date.now()
+        let priority = ['interrupt', 'normal', 'passive'].includes(msg.priority) ? msg.priority : 'normal'
+        // A gossiped/replayed "interrupt" from hours ago shouldn't barge into a
+        // session now — urgency expires.
+        if (priority === 'interrupt' && Date.now() - ts > 5 * 60_000) priority = 'normal'
         const inbound = {
           id,
           roomId,
           roomName: room?.name || roomId,
           from: String(msg.from || state.peerName || 'unknown').slice(0, 64),
           text: String(msg.text || '').slice(0, 16384),
-          ts: Number(msg.ts) || Date.now()
+          ts,
+          priority
         }
         this.store.pushInbound(inbound)
         this.store.appendLog(inbound)
@@ -392,16 +398,18 @@ export class Together extends EventEmitter {
 
   // --- messaging ---
 
-  sendMessage (roomName, text) {
+  sendMessage (roomName, text, priority = 'normal') {
     const room = this.store.roomByName(roomName)
     if (!room) throw new Error(`No room named "${roomName}". Rooms: ${this.store.rooms().map(r => r.name).join(', ') || '(none)'}`)
+    if (!['interrupt', 'normal', 'passive'].includes(priority)) priority = 'normal'
     const msgId = b4a.toString(hash(randomBytes(16)).subarray(0, 12), 'hex')
     const msg = {
       id: msgId,
       roomId: room.id,
       from: this.store.getName(),
       text: String(text).slice(0, 16384),
-      ts: Date.now()
+      ts: Date.now(),
+      priority
     }
     this.store.markSeen(msgId) // never re-ingest our own message if echoed
     this.store.enqueueOutbound(msg)

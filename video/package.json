@@ -1,0 +1,19 @@
+{
+  "name": "claude-together-explainer",
+  "private": true,
+  "description": "Remotion source for the Claude Together explainer video",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Explainer out/explainer.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.240",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.240"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "typescript": "^5.5.4"
+  }
+}

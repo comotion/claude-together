@@ -44,8 +44,9 @@ natural language — both end up calling the same MCP tools.
 |---|---|
 | `/together-invite bug-hunt` | create a room + invite code |
 | `/together-join X7KQ-2MPF-3HV9` | redeem a friend's code |
-| `/together-send bug-hunt found it, check session.ts` | send a message |
-| `/together-inbox` | check new messages |
+| `/together-send bug-hunt found it, check session.ts` | send a message (lands when their turn ends) |
+| `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session |
+| `/together-inbox` | check new + passive messages |
 | `/together-status` | rooms, peers, queues |
 
 Or just talk to Claude in any session:
@@ -59,6 +60,22 @@ Or just talk to Claude in any session:
 | "multiplayer status" | Rooms, connected peers, queued/unread counts. |
 | "set my display name to …" | The name shown on your messages. |
 | "leave room `name`" | Deletes the room key locally. |
+
+### Delivery modes — messages land like a teammate tapping your shoulder
+
+Messages don't sit in a mailbox waiting to be polled. `npm run register` installs
+Claude Code hooks that deliver them into live sessions the same way Claude Code
+surfaces your own mid-turn messages:
+
+| Priority | How it lands on the other side |
+|---|---|
+| `interrupt` (`/together-interrupt`) | Injected **mid-turn** at their Claude's next tool boundary — barges into running work. For "stop, don't merge that". |
+| `normal` (`/together-send`, default) | Delivered the moment their Claude **finishes its current turn** (or when they next prompt, if idle). |
+| `passive` | Never injected. Waits quietly for `/together-inbox`. |
+
+Every injected message is framed as untrusted data with an explicit instruction to
+relay it to the human and ask before acting on anything it requests — a friend's
+message can inform your Claude, never command it.
 
 ### Groups, not just co-op
 
