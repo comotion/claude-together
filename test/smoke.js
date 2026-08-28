@@ -47,17 +47,24 @@ console.log(`   code: ${inv.code}`)
 assert.match(inv.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/)
 
 console.log('2. Bob joins with the code (argon2 + DHT rendezvous + handshake)…')
+const aliceSawJoin = waitFor(alice, 'message', m => m.kind === 'presence')
 const joined = await bob.joinWithCode(inv.code.toLowerCase()) // case-insensitive
 assert.equal(joined.roomName, 'test-room')
 
 await Promise.all([waitFor(alice, 'peer-joined'), waitFor(bob, 'peer-joined')])
 
+console.log('   alice gets an automatic join announcement…')
+const joinNotice = await aliceSawJoin
+assert.equal(joinNotice.from, 'bob')
+assert.equal(joinNotice.text, 'joined the room')
+assert.equal(joinNotice.kind, 'presence')
+
 console.log('3. Two-way messaging…')
-const gotByAlice = waitFor(alice, 'message')
+const gotByAlice = waitFor(alice, 'message', m => m.kind === 'chat')
 bob.sendMessage('test-room', 'hello from bob')
 assert.equal((await gotByAlice).text, 'hello from bob')
 
-const gotByBob = waitFor(bob, 'message')
+const gotByBob = waitFor(bob, 'message', m => m.kind === 'chat')
 alice.sendMessage('test-room', 'hey bob, ship it')
 assert.equal((await gotByBob).from, 'alice')
 console.log('   both directions ok')
@@ -66,12 +73,20 @@ console.log('4. Carol joins the SAME room via an invite from Bob (not Alice)…'
 const carol = new Together({ store: new Store(carolDir), bootstrap })
 carol.store.setName('carol')
 await carol.start()
+const bobSawCarolJoin = waitFor(bob, 'message', m => m.kind === 'presence' && m.from === 'carol')
 const inv2 = bob.createInvite('test-room')
 const joined2 = await carol.joinWithCode(inv2.code)
 assert.equal(joined2.roomName, 'test-room')
 // Carol should hear about at least one member; catch-up history should flow too.
 await waitFor(carol, 'peer-joined')
-console.log('   carol is in, connected to the mesh')
+await bobSawCarolJoin
+console.log('   carol is in, connected to the mesh; bob got her join announcement')
+
+console.log('   status shows membership with last-seen…')
+const bobStatus = bob.status()
+const bobRoom = bobStatus.rooms.find(r => r.name === 'test-room')
+assert.ok(bobRoom.members.some(m => m.name === 'alice'))
+assert.ok(bobRoom.members.some(m => m.name === 'carol'))
 
 console.log('5. Group broadcast: Alice sends, Bob AND Carol receive…')
 const bobGot = waitFor(bob, 'message', m => m.text === 'group ping')
