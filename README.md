@@ -37,7 +37,18 @@ manually. Then restart your Claude Code session — that's it.
 
 ## Usage
 
-Just talk to Claude in any session:
+Two equivalent ways: **slash commands** (installed by `npm run register`) or plain
+natural language — both end up calling the same MCP tools.
+
+| Slash command | Shorthand for |
+|---|---|
+| `/together-invite bug-hunt` | create a room + invite code |
+| `/together-join X7KQ-2MPF-3HV9` | redeem a friend's code |
+| `/together-send bug-hunt found it, check session.ts` | send a message |
+| `/together-inbox` | check new messages |
+| `/together-status` | rooms, peers, queues |
+
+Or just talk to Claude in any session:
 
 | You say | What happens |
 |---|---|
