@@ -1,6 +1,7 @@
 // End-to-end smoke test on a local Hyperswarm testnet (no internet, no real DHT).
 // Covers: short-code pairing, two-way messaging, three-member rooms via any-member
-// invites, group broadcast, and offline catch-up relayed through a friend's log.
+// invites, group broadcast, recipient-addressed messages, and offline catch-up
+// relayed through a friend's log.
 import assert from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -80,7 +81,18 @@ alice.sendMessage('test-room', 'group ping')
 await Promise.all([bobGot, carolGot])
 console.log('   both received the broadcast')
 
-console.log('6. Offline relay: Carol goes offline, Alice sends, Alice goes offline,')
+console.log('6. Addressed message: Alice sends "to bob" — Bob active, Carol passive…')
+const bobAddressed = waitFor(bob, 'message', m => m.text === 'just for bob')
+const carolAddressed = waitFor(carol, 'message', m => m.text === 'just for bob')
+const sendRes = alice.sendMessage('test-room', 'just for bob', 'normal', ['Bob']) // name match is case-insensitive
+assert.deepEqual(sendRes.to, ['Bob'])
+const [bobCopy, carolCopy] = await Promise.all([bobAddressed, carolAddressed])
+assert.equal(bobCopy.priority, 'normal', 'named recipient keeps the active priority')
+assert.equal(carolCopy.priority, 'passive', 'unnamed member is demoted to passive')
+assert.deepEqual(carolCopy.to, ['Bob'], 'addressing survives the wire for the chat log')
+console.log('   bob got it actively, carol only in her inbox/log')
+
+console.log('7. Offline relay: Carol goes offline, Alice sends, Alice goes offline,')
 console.log('   Carol returns and catches up through BOB (store-and-forward via friend)…')
 await carol.stop()
 const bobRelay = waitFor(bob, 'message', m => m.text === 'relay me')
@@ -95,7 +107,7 @@ const relayed = await carolCaughtUp
 assert.equal(relayed.from, 'alice')
 console.log('   carol received alice\'s message from bob\'s log — sender was offline')
 
-console.log('7. Dedup: exactly one copy in carol\'s inbox…')
+console.log('8. Dedup: exactly one copy in carol\'s inbox…')
 const inbox = carol2.store.drainInbound()
 assert.equal(inbox.filter(m => m.text === 'relay me').length, 1)
 

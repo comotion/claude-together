@@ -16,6 +16,24 @@ function roomIdFor (roomKey) {
   return b4a.toString(derive(roomKey, 'claude-together-roomid').subarray(0, 8), 'hex')
 }
 
+// Optional recipient list on a message: display names that should get the message
+// at its active priority; everyone else in the room receives it passively.
+function sanitizeTo (to) {
+  if (!Array.isArray(to)) return undefined
+  const out = []
+  const seen = new Set()
+  for (const n of to) {
+    const name = String(n).trim().slice(0, 64)
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(name)
+    if (out.length >= 32) break
+  }
+  return out.length ? out : undefined
+}
+
 // P2P layer. One Hyperswarm instance; every room is a DHT topic derived from its
 // 256-bit room key; pairing happens on a short-lived topic derived from the invite code.
 // Hyperswarm gives us ONE E2E Noise-encrypted socket per peer (connections are per-peer,
@@ -364,11 +382,12 @@ export class Together extends EventEmitter {
         this.store.markSeen(id)
         const room = this.store.rooms().find(r => r.id === roomId)
         const ts = Number(msg.ts) || Date.now()
-        let priority = ['interrupt', 'normal', 'passive'].includes(msg.priority) ? msg.priority : 'normal'
-        // A gossiped/replayed "interrupt" from hours ago shouldn't barge into a
-        // session now — urgency expires.
-        if (priority === 'interrupt' && Date.now() - ts > 5 * 60_000) priority = 'normal'
-        const inbound = {
+        const priority = ['interrupt', 'normal', 'passive'].includes(msg.priority) ? msg.priority : 'normal'
+        const to = sanitizeTo(msg.to)
+        // The relayed/logged copy keeps the sender's priority and addressing:
+        // every hop (including offline members catching up later) decides locally
+        // how the message lands there.
+        const relay = {
           id,
           roomId,
           roomName: room?.name || roomId,
@@ -377,12 +396,22 @@ export class Together extends EventEmitter {
           ts,
           priority
         }
+        if (to) relay.to = to
+        // Local delivery: an addressed message lands actively only for the named
+        // recipients — everyone else gets it passively (inbox/log only).
+        const myName = (this.store.getName() || '').toLowerCase()
+        let localPriority = priority
+        if (to && !to.some(n => n.toLowerCase() === myName)) localPriority = 'passive'
+        // A gossiped/replayed "interrupt" from hours ago shouldn't barge into a
+        // session now — urgency expires.
+        if (localPriority === 'interrupt' && Date.now() - ts > 5 * 60_000) localPriority = 'normal'
+        const inbound = { ...relay, priority: localPriority }
         this.store.pushInbound(inbound)
-        this.store.appendLog(inbound)
+        this.store.appendLog(relay)
         // Forward to other live peers in the room — heals meshes where two members
         // can't reach each other directly but both reach us. Dedup stops loops.
         for (const other of this.roomConns.get(roomId) || []) {
-          if (other !== conn) this._send(other, { t: 'msg', ...inbound })
+          if (other !== conn) this._send(other, { t: 'msg', ...relay })
         }
         this.emit('message', inbound)
         break
@@ -398,10 +427,11 @@ export class Together extends EventEmitter {
 
   // --- messaging ---
 
-  sendMessage (roomName, text, priority = 'normal') {
+  sendMessage (roomName, text, priority = 'normal', to = undefined) {
     const room = this.store.roomByName(roomName)
     if (!room) throw new Error(`No room named "${roomName}". Rooms: ${this.store.rooms().map(r => r.name).join(', ') || '(none)'}`)
     if (!['interrupt', 'normal', 'passive'].includes(priority)) priority = 'normal'
+    to = sanitizeTo(to)
     const msgId = b4a.toString(hash(randomBytes(16)).subarray(0, 12), 'hex')
     const msg = {
       id: msgId,
@@ -411,12 +441,20 @@ export class Together extends EventEmitter {
       ts: Date.now(),
       priority
     }
+    if (to) msg.to = to
     this.store.markSeen(msgId) // never re-ingest our own message if echoed
     this.store.enqueueOutbound(msg)
     this.store.appendLog(msg)
     const conns = this.roomConns.get(room.id) || new Set()
     for (const conn of conns) this._send(conn, { t: 'msg', ...msg })
-    return { id: msgId, deliveredToPeers: conns.size, queued: conns.size === 0 }
+    const online = new Set([...conns].map(c => (c._ct?.peerName || '').toLowerCase()))
+    return {
+      id: msgId,
+      deliveredToPeers: conns.size,
+      queued: conns.size === 0,
+      to,
+      offlineRecipients: to ? to.filter(n => !online.has(n.toLowerCase())) : []
+    }
   }
 
   // --- introspection ---

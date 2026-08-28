@@ -51,6 +51,7 @@ natural language — both end up calling the same MCP tools.
 | `/together-invite bug-hunt` | create a room + invite code |
 | `/together-join X7KQ-2MPF-3HV9` | redeem a friend's code |
 | `/together-send bug-hunt found it, check session.ts` | send a message (lands when their turn ends) |
+| `/together-send bug-hunt to alice: here's that stack trace` | address specific people — only they get active delivery |
 | `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session |
 | `/together-inbox` | check new + passive messages |
 | `/together-status` | rooms, peers, queues |
@@ -78,6 +79,13 @@ surfaces your own mid-turn messages:
 | `interrupt` (`/together-interrupt`) | Injected **mid-turn** at their Claude's next tool boundary — barges into running work. For "stop, don't merge that". |
 | `normal` (`/together-send`, default) | Delivered the moment their Claude **finishes its current turn** (or when they next prompt, if idle). |
 | `passive` | Never injected. Waits quietly for `/together-inbox`. |
+
+**Addressing specific people.** Any message can carry a "to" list of display names
+(`/together-send bug-hunt to alice: …`, or just "tell alice …"). Every member still
+gets the message in the shared room chat log, but only the named recipients receive
+it at the active priority — everyone else gets it passively, with no interruption.
+So sharing a log meant for one person doesn't barge into three other sessions.
+Without a "to" list, the whole room gets the message at the send priority.
 
 Every injected message is framed as untrusted data with an explicit instruction to
 relay it to the human and ask before acting on anything it requests — a friend's
