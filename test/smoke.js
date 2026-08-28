@@ -26,6 +26,8 @@ function waitFor (emitter, event, pred = () => true, timeoutMs = 45_000) {
   })
 }
 
+process.env.CLAUDE_TOGETHER_LABEL = 'smoke-session'
+
 const testnet = await createTestnet(3)
 const bootstrap = testnet.bootstrap
 
@@ -58,6 +60,8 @@ const joinNotice = await aliceSawJoin
 assert.equal(joinNotice.from, 'bob')
 assert.equal(joinNotice.text, 'joined the room')
 assert.equal(joinNotice.kind, 'presence')
+assert.equal(joinNotice.host, os.hostname().slice(0, 64))
+assert.equal(joinNotice.label, 'smoke-session')
 
 console.log('3. Two-way messaging…')
 const gotByAlice = waitFor(alice, 'message', m => m.kind === 'chat')

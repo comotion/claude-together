@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import os from 'node:os'
+import path from 'node:path'
 import Hyperswarm from 'hyperswarm'
 import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
@@ -14,6 +15,16 @@ const INVITE_TTL_MS = 15 * 60_000
 
 function roomIdFor (roomKey) {
   return b4a.toString(derive(roomKey, 'claude-together-roomid').subarray(0, 8), 'hex')
+}
+
+// A human-readable tag for THIS session, sent along with join announcements so
+// peers can tell which of your sessions joined. Claude Code launches MCP servers
+// in the project directory, so the folder name is a good default; override with
+// CLAUDE_TOGETHER_LABEL.
+function sessionLabel () {
+  if (process.env.CLAUDE_TOGETHER_LABEL) return process.env.CLAUDE_TOGETHER_LABEL.slice(0, 64)
+  const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd()
+  return path.basename(dir).slice(0, 64)
 }
 
 // P2P layer. One Hyperswarm instance; every room is a DHT topic derived from its
@@ -346,7 +357,13 @@ export class Together extends EventEmitter {
         // in the outbox now and replays as soon as the room context is proven, and
         // it queues/gossips for members who are currently offline.
         if (!alreadyMember) {
-          this._broadcast(roomId, { text: 'joined the room', priority: 'normal', kind: 'presence' })
+          this._broadcast(roomId, {
+            text: 'joined the room',
+            priority: 'normal',
+            kind: 'presence',
+            host: os.hostname().slice(0, 64),
+            label: sessionLabel()
+          })
         }
         join.resolve({ roomId, roomName: grant.roomName })
         break
@@ -385,7 +402,9 @@ export class Together extends EventEmitter {
           text: String(msg.text || '').slice(0, 16384),
           ts,
           priority,
-          kind: msg.kind === 'presence' ? 'presence' : 'chat'
+          kind: msg.kind === 'presence' ? 'presence' : 'chat',
+          ...(msg.host ? { host: String(msg.host).slice(0, 64) } : {}),
+          ...(msg.label ? { label: String(msg.label).slice(0, 64) } : {})
         }
         this.store.touchMember(roomId, inbound.from, ts)
         this.store.pushInbound(inbound)
@@ -418,7 +437,7 @@ export class Together extends EventEmitter {
 
   // Shared send path for chat and presence: outbox until acked, room log for
   // offline catch-up through friends, immediate fan-out to live peers.
-  _broadcast (roomId, { text, priority, kind }) {
+  _broadcast (roomId, { text, priority, kind, host, label }) {
     const msgId = b4a.toString(hash(randomBytes(16)).subarray(0, 12), 'hex')
     const msg = {
       id: msgId,
@@ -427,7 +446,9 @@ export class Together extends EventEmitter {
       text: String(text).slice(0, 16384),
       ts: Date.now(),
       priority,
-      kind
+      kind,
+      ...(host ? { host } : {}),
+      ...(label ? { label } : {})
     }
     this.store.markSeen(msgId) // never re-ingest our own message if echoed
     this.store.enqueueOutbound(msg)

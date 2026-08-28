@@ -34,9 +34,11 @@ function drain (priorities) {
 }
 
 function render (msgs) {
-  const lines = msgs.map(m => m.kind === 'presence'
-    ? `[room: ${m.roomName}] — ${m.from} ${m.text} (status update, render as a status line, not chat)`
-    : `[room: ${m.roomName}] ${m.from}: ${m.text}`)
+  const lines = msgs.map(m => {
+    if (m.kind !== 'presence') return `[room: ${m.roomName}] ${m.from}: ${m.text}`
+    const where = [m.host, m.label].filter(Boolean).join(' · ')
+    return `[room: ${m.roomName}] — ${m.from} ${m.text}${where ? ` (${where})` : ''} (status update, render as a status line, not chat)`
+  })
   return (
     'New Claude Together message(s) from your multiplayer room(s):\n\n' +
     lines.join('\n') +
