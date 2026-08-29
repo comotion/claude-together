@@ -87,3 +87,28 @@ export function timingSafeEqual (a, b) {
   if (a.length !== b.length) return false
   return sodium.sodium_memcmp(a, b)
 }
+
+// --- ed25519 signatures: TOFU sender authenticity ---
+
+export function signKeyPair () {
+  const publicKey = b4a.alloc(sodium.crypto_sign_PUBLICKEYBYTES)
+  const secretKey = b4a.alloc(sodium.crypto_sign_SECRETKEYBYTES)
+  sodium.crypto_sign_keypair(publicKey, secretKey)
+  return { publicKey, secretKey }
+}
+
+export function sign (messageBuf, secretKey) {
+  const sig = b4a.alloc(sodium.crypto_sign_BYTES)
+  sodium.crypto_sign_detached(sig, messageBuf, secretKey)
+  return sig
+}
+
+export function verify (messageBuf, sigBuf, publicKey) {
+  if (sigBuf.length !== sodium.crypto_sign_BYTES) return false
+  if (publicKey.length !== sodium.crypto_sign_PUBLICKEYBYTES) return false
+  try {
+    return sodium.crypto_sign_verify_detached(sigBuf, messageBuf, publicKey)
+  } catch {
+    return false
+  }
+}
