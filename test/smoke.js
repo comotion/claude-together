@@ -63,11 +63,18 @@ assert.equal(joinNotice.text, 'joined the room')
 assert.equal(joinNotice.kind, 'presence')
 assert.equal(joinNotice.host, os.hostname().slice(0, 64))
 assert.equal(joinNotice.label, 'smoke-session')
+assert.match(joinNotice.sid, /^[0-9a-f]{6}$/, 'join notice carries the session id')
 
 console.log('3. Two-way messaging…')
 const gotByAlice = waitFor(alice, 'message', m => m.kind === 'chat')
 bob.sendMessage('test-room', 'hello from bob')
-assert.equal((await gotByAlice).text, 'hello from bob')
+const bobMsg = await gotByAlice
+assert.equal(bobMsg.text, 'hello from bob')
+console.log('   chat messages carry session identifiers and verify (TOFU)…')
+assert.equal(bobMsg.host, os.hostname().slice(0, 64))
+assert.equal(bobMsg.label, 'smoke-session')
+assert.equal(bobMsg.sid, bob.sid, 'chat carries the sender session id')
+assert.equal(bobMsg.auth, 'verified', 'signature verifies and pins on first contact')
 
 const gotByBob = waitFor(bob, 'message', m => m.kind === 'chat')
 alice.sendMessage('test-room', 'hey bob, ship it')
@@ -89,9 +96,12 @@ console.log('   carol is in, connected to the mesh; bob got her join announcemen
 
 console.log('   status shows membership with last-seen…')
 const bobStatus = bob.status()
+assert.match(bobStatus.session.sid, /^[0-9a-f]{6}$/, 'status reports own session id')
 const bobRoom = bobStatus.rooms.find(r => r.name === 'test-room')
 assert.ok(bobRoom.members.some(m => m.name === 'alice'))
 assert.ok(bobRoom.members.some(m => m.name === 'carol'))
+assert.ok(bobRoom.connectedPeers.every(p => typeof p.name === 'string'), 'peers are structured')
+assert.ok(bobRoom.connectedPeers.some(p => p.sid && p.label === 'smoke-session'), 'peers carry session identifiers')
 
 console.log('5. Group broadcast: Alice sends, Bob AND Carol receive…')
 const bobGot = waitFor(bob, 'message', m => m.text === 'group ping')
@@ -124,11 +134,27 @@ const carolCaughtUp = waitFor(carol2, 'message', m => m.text === 'relay me', 60_
 await carol2.start()
 const relayed = await carolCaughtUp
 assert.equal(relayed.from, 'alice')
-console.log('   carol received alice\'s message from bob\'s log — sender was offline')
+assert.equal(relayed.auth, 'verified', 'signature survives relay through a friend and still verifies')
+console.log('   carol received alice\'s message from bob\'s log — sender was offline, signature intact')
 
 console.log('8. Dedup: exactly one copy in carol\'s inbox…')
 const inbox = carol2.store.drainInbound()
 assert.equal(inbox.filter(m => m.text === 'relay me').length, 1)
+
+console.log('9. TOFU pinning: alice\'s store pinned bob\'s public key…')
+const pinnedBob = alice.store.membersFor(joined.roomId).bob
+assert.match(pinnedBob.pk, /^[0-9a-f]{64}$/, 'bob\'s key is pinned in alice\'s member list')
+
+console.log('10. leave_room disconnects for real…')
+await bob.leaveRoom('test-room')
+assert.equal(bob.store.rooms().length, 0, 'key forgotten')
+const bobGotAfterLeave = new Promise(resolve => {
+  bob.once('message', () => resolve(true))
+  setTimeout(() => resolve(false), 4000).unref?.()
+})
+carol2.sendMessage('test-room', 'bob should not see this')
+assert.equal(await bobGotAfterLeave, false, 'no messages arrive after leaving')
+assert.equal(bob.status().rooms.length, 0, 'status shows no rooms')
 
 await bob.stop()
 await carol2.stop()
