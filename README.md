@@ -20,6 +20,10 @@ Built on [Hyperswarm](https://github.com/holepunchto/hyperswarm): peers find eac
 through a public BitTorrent-style DHT, hole-punch a direct UDP connection, and talk over
 Noise-encrypted sockets. Exposed to Claude as an [MCP](https://modelcontextprotocol.io) server.
 
+**Current release: v0.3.0 (LTS)** — per-project room membership, signed messages
+(TOFU), session identifiers, and a version handshake. LTS: 0.3.x stays
+wire-compatible; peers on mismatched versions detect and report it in-session.
+
 ### ▶ 30-second explainer
 
 ![Claude Together explainer](docs/explainer.gif)
@@ -54,19 +58,28 @@ natural language — both end up calling the same MCP tools.
 | `/together-send bug-hunt to alice: here's that stack trace` | address specific people — only they get active delivery |
 | `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session |
 | `/together-inbox` | check new + passive messages |
+| `/together-history bug-hunt` | re-read recent room chat (non-destructive) |
 | `/together-status` | rooms, peers, members + last seen, queues |
 
 Or just talk to Claude in any session:
 
 | You say | What happens |
 |---|---|
-| "create an invite for room `name`" | Creates the room, prints a short single-use code (15 min TTL). Keep your session open until your friend joins. |
+| "create an invite for room `name`" | Creates the room, prints a short single-use code (5 min TTL). Keep your session open until your friend joins. |
 | "join room `X7KQ-2MPF-3HV9`" | Redeems a code from a friend; pairs in a few seconds. Everyone already in the room automatically gets a "`name` joined the room (`hostname` · `session label`)" notice — even members who are offline see it when they reconnect. The label defaults to your project folder name; set `CLAUDE_TOGETHER_LABEL` to override it. |
 | "send to `name`: …" | Delivers instantly if they're online, otherwise queues on disk and delivers when you're both online. |
 | "check my messages" | Fetches everything unread, across all rooms. |
 | "multiplayer status" | Rooms, connected peers, known members with last-seen times, queued/unread counts. |
+| "show the history of `name`" | Re-reads the recent room log (last 200 msgs / 7 days) without touching your unread inbox. |
 | "set my display name to …" | The name shown on your messages. |
-| "leave room `name`" | Deletes the room key locally. |
+| "leave room `name`" | Deletes the room key, stops announcing on the DHT, and closes the room's connections. |
+
+**Version mismatches are detected on connect.** Sessions exchange their
+claude-together version in the room handshake; if a peer runs an older version,
+your Claude tells you and suggests passing the update along — and if *you* are
+the outdated one, Claude offers to `git pull` + `npm install` for you and reminds
+you that restarting Claude Code and resuming (`claude --continue`) keeps your
+session.
 
 ### Delivery modes — messages land like a teammate tapping your shoulder
 
@@ -104,13 +117,29 @@ Rooms are N-way meshes, not 1:1 links:
   messages / 7 days) and replays it to peers who reconnect. If Alice sends while
   Carol is offline and then leaves, Carol still gets it from Bob the next time either
   is online — store-and-forward through the group, no server.
-- **Every session is a peer.** Your laptop, your desktop, a second account, three
-  Claude Code sessions on one machine — each just joins the mesh. Sessions on the
-  same machine share one identity, room list, and inbox.
+- **Every project is a peer.** Your laptop, your desktop, a second account, two
+  different projects on one machine — each joins the mesh in its own right.
 
-Pairing and reconnecting happen automatically from then on: room keys persist in
-`~/.claude-together/`, and sessions re-find each other through the DHT. Codes are
-only ever needed to add a new person.
+### Membership is per project, not per machine
+
+Joining a room is an explicit act, scoped to the project directory the session runs
+in: each project gets its own store under `~/.claude-together/projects/<name>-<hash>/`
+(room keys, inbox, queues). A session in another folder is **not** in your rooms, sees
+none of your messages, and has to redeem its own invite to join. Only your display
+name is machine-global. Two sessions open in the *same* project directory share that
+project's membership and show up as two peers.
+
+Pairing and reconnecting happen automatically from then on: room keys persist in the
+project's store, and sessions re-find each other through the DHT. Codes are only ever
+needed to add a new person (or a new project). Set `CLAUDE_TOGETHER_DIR` to point
+several projects at one shared store if you deliberately want the old machine-global
+behavior.
+
+**Migrating from 0.2:** pre-0.3 versions kept one machine-global room list; 0.3 no
+longer joins those rooms. The first session in each project gets a one-time notice
+listing them — mint fresh invites in the projects that need them, or set
+`CLAUDE_TOGETHER_DIR=~/.claude-together` to keep using the old shared store. Your
+display name (and new signing identity) carry over automatically.
 
 ## Why the invite codes can be short
 
@@ -124,7 +153,7 @@ The code is not the encryption key — it's a single-use pairing secret
 3. Over that authenticated, encrypted link the inviter hands over the room's real
    random **256-bit key**. The code is then retired forever.
 
-60 bits of entropy + argon2 + single-use + 15-minute expiry ≫ anything brute-forceable
+60 bits of entropy + argon2 + single-use + 5-minute expiry ≫ anything brute-forceable
 in the window.
 
 ## Security model
@@ -152,14 +181,19 @@ trusted.
 ### Limitations — know these before trusting it with anything sensitive
 
 - **A room key is permanent and unrevocable.** Anyone who ever holds it — an invited
-  member, or anyone a code leaks to within its 15-minute window — keeps read/write
-  access forever. `leave_room` only deletes *your own* copy; it can't evict anyone else.
+  member, or whoever redeems a leaked code first within its 5-minute window (an
+  invite is spent the moment its key is handed over, so only one redeemer wins) —
+  keeps read/write access forever. `leave_room` only deletes *your own* copy; it can't evict anyone else.
   **You cannot kick a member.** The only way to exclude someone is for everyone else to
   start a fresh room. There is no forward secrecy: a leaked key exposes past logged
   history and all future messages.
-- **Sender names are not authenticated.** `from`, `host`, and `label` are self-asserted;
-  any room member can post under another member's name. Treat displayed identity as a
-  hint, not proof.
+- **Sender authenticity is trust-on-first-use, not absolute.** Every message is signed
+  with a long-lived per-identity ed25519 key; receivers pin a sender's key the first
+  time they see it and warn loudly if a later message is signed with a different key
+  (or arrives unsigned from a sender who used to sign). But the *first* message from a
+  name is taken on faith, display names are not unique, and `host`/`label`/`sid` remain
+  self-asserted decoration. Treat the warnings as real, and the absence of warnings as
+  strong-but-not-absolute.
 - **Any member can invite anyone.** There is no admin role or approval step.
 - **Prompt-injection risk is real.** Messages are injected into your live Claude session
   (mid-turn for `interrupt` priority, when the agent has tool access). The untrusted-data
@@ -167,9 +201,10 @@ trusted.
   receiving agent. Don't run Claude Together in a session with dangerous auto-approved
   tools while in a room with people you don't trust, and prefer `normal`/`passive` over
   `interrupt` from untrusted senders.
-- **Joining leaks your hostname and project-folder name** to the room (so members can
-  tell your sessions apart). Set `CLAUDE_TOGETHER_LABEL` to override the folder name;
-  your machine hostname is still sent.
+- **Every message carries your hostname, project-folder name, and a per-session id**
+  (so members can tell your machines, projects, and sessions apart). Set
+  `CLAUDE_TOGETHER_LABEL` to override the folder name; your machine hostname is
+  still sent, and the session id is random per process.
 
 **Bottom line:** safe for the intended use — *friends you trust, collaborating*. It is
 **not** a zero-trust or anonymous messenger, and a room key should be treated like a
@@ -196,6 +231,7 @@ to your inbox, and start a new room if it might have leaked.
   auth, at-least-once message protocol
 - [`src/crypto.js`](src/crypto.js) — invite codes, argon2 stretching, MACs, secretbox
 - [`src/store.js`](src/store.js) — persistence: identity, room keys, inbox/outbox
+- [`src/scope.js`](src/scope.js) — per-project store scoping (shared by server and hooks)
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
 
 ## License
