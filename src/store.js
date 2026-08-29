@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import b4a from 'b4a'
+import { scopedDir, identityFile } from './scope.js'
+import { signKeyPair } from './crypto.js'
 
 const LOG_REPLAY_MAX = 200
 const LOG_REPLAY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -17,6 +18,13 @@ const SEEN_COMPACT_AT = 60_000
 // (seen.jsonl, log/*.jsonl) or file-per-message keyed by message id (inbox/, outbox/) —
 // concurrent writers converge instead of clobbering a shared JSON blob.
 //
+// Scoping: with no explicit dir and no CLAUDE_TOGETHER_DIR, the store lives in a
+// per-project directory (~/.claude-together/projects/<key>) — room membership,
+// inbox, and queues belong to the project a session runs in, never to the whole
+// machine. Only the display name is machine-global (identity file at the root).
+// An explicit dir (tests) or CLAUDE_TOGETHER_DIR keeps everything, name included,
+// in that one directory.
+//
 // Layout:
 //   config.json   — display name + room keys (small, rarely written, reloaded on read)
 //   outbox/<id>.json — sent messages until some peer acks them
@@ -25,7 +33,9 @@ const SEEN_COMPACT_AT = 60_000
 //   log/<roomId>.jsonl — recent room history, replayed to peers when they reconnect
 export class Store {
   constructor (dir) {
-    this.dir = dir || process.env.CLAUDE_TOGETHER_DIR || path.join(os.homedir(), '.claude-together')
+    const explicit = dir || process.env.CLAUDE_TOGETHER_DIR
+    this.dir = explicit || scopedDir()
+    this.identityFile = explicit ? null : identityFile()
     for (const d of ['', 'outbox', 'inbox', 'log', 'members']) {
       fs.mkdirSync(path.join(this.dir, d), { recursive: true })
     }
@@ -78,12 +88,47 @@ export class Store {
 
   _config () { return this._readJson('config.json', { name: null, rooms: {} }) }
 
-  getName () { return this._config().name }
+  // The identity file (machine-global display name + signing keypair) may be the
+  // legacy pre-scoping config.json, which also holds old room keys —
+  // read-modify-write preserves them for anyone running CLAUDE_TOGETHER_DIR
+  // pointed at the root.
+  _readIdentity () {
+    if (!this.identityFile) return this._config()
+    try { return JSON.parse(fs.readFileSync(this.identityFile, 'utf8')) } catch { return {} }
+  }
+
+  _updateIdentity (mutate) {
+    const c = this._readIdentity()
+    mutate(c)
+    if (this.identityFile) {
+      const tmp = this.identityFile + '.' + process.pid + '.tmp'
+      fs.writeFileSync(tmp, JSON.stringify(c, null, 2))
+      fs.renameSync(tmp, this.identityFile)
+    } else {
+      this._writeJson('config.json', c)
+    }
+  }
+
+  getName () { return this._readIdentity().name || null }
 
   setName (name) {
-    const c = this._config()
-    c.name = name
-    this._writeJson('config.json', c)
+    this._updateIdentity(c => { c.name = name })
+  }
+
+  // Long-lived ed25519 identity keypair, generated on first use. Lives with the
+  // display name (machine-global by default), so "einar" keeps one stable public
+  // key across sessions and projects — the anchor for TOFU sender authenticity.
+  signingKeyPair () {
+    const c = this._readIdentity()
+    if (c.signPk && c.signSk) {
+      return { publicKey: b4a.from(c.signPk, 'base64'), secretKey: b4a.from(c.signSk, 'base64') }
+    }
+    const kp = signKeyPair()
+    this._updateIdentity(cfg => {
+      cfg.signPk = b4a.toString(kp.publicKey, 'base64')
+      cfg.signSk = b4a.toString(kp.secretKey, 'base64')
+    })
+    return kp
   }
 
   addRoom (id, name, keyBuf) {
@@ -99,6 +144,19 @@ export class Store {
     for (const m of this.outboundFor(id)) this.ackOutbound(m.id)
     try { fs.rmSync(this._file('log', id + '.jsonl'), { force: true }) } catch {}
     try { fs.rmSync(this._file('members', id + '.json'), { force: true }) } catch {}
+  }
+
+  // One-shot per project store: returns the names of pre-0.3 machine-global rooms
+  // (still sitting in the root identity/config file) so the server can explain,
+  // once, why they are no longer joined after the per-project scoping change.
+  takeLegacyRoomsNotice () {
+    if (!this.identityFile) return null // explicit dir = old behavior, nothing changed
+    if (this._config().legacyNoticeShown) return null
+    const c = this._config()
+    c.legacyNoticeShown = true
+    this._writeJson('config.json', c)
+    const names = Object.values(this._readIdentity().rooms || {}).map(r => r?.name).filter(Boolean)
+    return names.length ? names : null
   }
 
   rooms () {
@@ -193,12 +251,20 @@ export class Store {
     return this._readJson(path.join('members', roomId + '.json'), {})
   }
 
-  touchMember (roomId, name, ts) {
+  touchMember (roomId, name, ts, info) {
     if (!name || !roomId) return
     const members = this.membersFor(roomId)
     const prev = members[name]
-    if (prev && prev.lastSeen >= ts) return
-    members[name] = { lastSeen: ts }
+    const pinsKey = info?.pk && !prev?.pk && /^[0-9a-f]{64}$/.test(info.pk)
+    const hasNewInfo = (info && (info.host || info.label)) || pinsKey
+    if (prev && prev.lastSeen >= ts && !hasNewInfo) return
+    const next = { ...(prev || {}), lastSeen: Math.max(ts, prev?.lastSeen || 0) }
+    if (info?.host) next.host = String(info.host).slice(0, 64)
+    if (info?.label) next.label = String(info.label).slice(0, 64)
+    // TOFU pin: a member's first verified public key sticks; it is never
+    // overwritten here — a different key later is flagged upstream, not adopted.
+    if (pinsKey) next.pk = info.pk
+    members[name] = next
     this._writeJson(path.join('members', roomId + '.json'), members)
   }
 

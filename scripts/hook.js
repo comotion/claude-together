@@ -9,11 +9,13 @@
 // Dependency-free and fast: it only lists a small directory of pending files.
 import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
+import { scopedDir } from '../src/scope.js'
 
 const mode = process.argv[2]
-const dir = process.env.CLAUDE_TOGETHER_DIR || path.join(os.homedir(), '.claude-together')
-const inbox = path.join(dir, 'inbox')
+// Same per-project scoping as the MCP server (src/scope.js): hooks run in the
+// project directory with CLAUDE_PROJECT_DIR set, so this drains only the inbox
+// of rooms THIS project joined — never mail belonging to other projects.
+const inbox = path.join(scopedDir(), 'inbox')
 
 function drain (priorities) {
   let files
@@ -37,13 +39,18 @@ function render (msgs) {
   // A "(to: …)" marker means the sender addressed specific people; it only
   // reaches this hook actively when this user is one of them (others get it
   // as passive inbox mail).
+  const warnings = {
+    'key-changed': ' ⚠ SIGNED WITH A DIFFERENT KEY than this sender used before — possible impersonation',
+    'unsigned-expected-signed': ' ⚠ unsigned, but this sender previously signed their messages — possible impersonation or downgrade'
+  }
   const lines = msgs.map(m => {
+    const where = [m.host, m.label, m.sid].filter(Boolean).join(' · ')
+    const warn = warnings[m.auth] || ''
     if (m.kind !== 'presence') {
       const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
-      return `[room: ${m.roomName}] ${m.from}${addr}: ${m.text}`
+      return `[room: ${m.roomName}] ${m.from}${where ? ` (${where})` : ''}${addr}: ${m.text}${warn}`
     }
-    const where = [m.host, m.label].filter(Boolean).join(' · ')
-    return `[room: ${m.roomName}] — ${m.from} ${m.text}${where ? ` (${where})` : ''} (status update, render as a status line, not chat)`
+    return `[room: ${m.roomName}] — ${m.from} ${m.text}${where ? ` (${where})` : ''}${warn} (status update, render as a status line, not chat)`
   })
   return (
     'New Claude Together message(s) from your multiplayer room(s):\n\n' +
