@@ -27,7 +27,8 @@ const AUTH_WARNINGS = {
 
 function renderLine (m, withTimestamp) {
   const stamp = withTimestamp ? `[${new Date(m.ts).toISOString()}] ` : ''
-  const where = [m.host, m.label, m.sid].filter(Boolean).join(' · ')
+  const where = [m.host, m.label, m.sid, m.harness ? `harness: ${m.harness}` : null]
+    .filter(Boolean).join(' · ')
   const warn = AUTH_WARNINGS[m.auth] || ''
   if (m.kind !== 'presence') {
     const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''

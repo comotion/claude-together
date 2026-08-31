@@ -63,9 +63,23 @@ function sessionLabel () {
   return path.basename(dir).slice(0, 64)
 }
 
+// Which agent harness this server is running under. Adapters/users set the env
+// var explicitly; CLAUDECODE=1 is set by Claude Code and serves as a fallback.
+// NOTE: harness is deliberately NOT covered by the message signature — the
+// 0.3.0 canonical signing form is frozen, so this field is advisory decoration
+// like the version string. Kept identical to session-multiplayer for interop.
+function harnessName () {
+  const env = process.env.SESSION_MULTIPLAYER_HARNESS
+  if (env) return env.slice(0, 32).replace(/[^A-Za-z0-9._ -]/g, '')
+  if (process.env.CLAUDECODE) return 'claude-code'
+  if (process.env.CODEX_HOME || process.env.CODEX_API_KEY) return 'codex'
+  return 'mcp'
+}
+
 const SID_RE = /^[0-9a-f]{1,16}$/
 const PK_RE = /^[0-9a-f]{64}$/
 const SIG_RE = /^[0-9a-f]{128}$/
+const HARNESS_RE = /^[A-Za-z0-9._ -]{1,32}$/
 
 // Canonical byte string a message signature covers: every field a receiver acts
 // on, in fixed order, excluding pk/sig themselves. Sender signs the final message
@@ -377,6 +391,7 @@ export class Together extends EventEmitter {
               host: os.hostname().slice(0, 64),
               label: sessionLabel(),
               sid: this.sid,
+              harness: harnessName(),
               v: VERSION
             })
             // At-least-once delivery: replay everything not yet acked for this room,
@@ -429,9 +444,10 @@ export class Together extends EventEmitter {
         state.peerHost = msg.host ? String(msg.host).slice(0, 64) : null
         state.peerLabel = msg.label ? String(msg.label).slice(0, 64) : null
         state.peerSid = typeof msg.sid === 'string' && SID_RE.test(msg.sid) ? msg.sid : null
+        state.peerHarness = typeof msg.harness === 'string' && HARNESS_RE.test(msg.harness) ? msg.harness : null
         state.peerVersion = typeof msg.v === 'string' && /^\d+\.\d+\.\d+$/.test(msg.v) ? msg.v : null
         this.store.touchMember(roomId, state.peerName, Date.now(), {
-          host: state.peerHost, label: state.peerLabel
+          host: state.peerHost, label: state.peerLabel, harness: state.peerHarness
         })
         this._versionCheck(state, roomId)
         this.emit('peer-joined', { roomId, name: state.peerName })
@@ -533,6 +549,7 @@ export class Together extends EventEmitter {
           ...(msg.host ? { host: String(msg.host).slice(0, 64) } : {}),
           ...(msg.label ? { label: String(msg.label).slice(0, 64) } : {}),
           ...(typeof msg.sid === 'string' && SID_RE.test(msg.sid) ? { sid: msg.sid } : {}),
+          ...(typeof msg.harness === 'string' && HARNESS_RE.test(msg.harness) ? { harness: msg.harness } : {}),
           // The signature travels with the message so members catching up later
           // through a friend's log can verify the original sender themselves.
           ...(auth === 'verified' || auth === 'key-changed' ? { pk: pkHex, sig: sigHex } : {})
@@ -550,6 +567,7 @@ export class Together extends EventEmitter {
         this.store.touchMember(roomId, inbound.from, ts, {
           host: relay.host,
           label: relay.label,
+          harness: relay.harness,
           ...(auth === 'verified' && !pinned ? { pk: pkHex } : {})
         })
         this.store.pushInbound(inbound)
@@ -578,7 +596,8 @@ export class Together extends EventEmitter {
     const peerV = state.peerVersion || '0.2.0' // peers predating the version field
     const c = cmpVersion(peerV, VERSION)
     if (c === 0) return
-    const who = [state.peerName, state.peerHost, state.peerLabel, state.peerSid].filter(Boolean).join(' · ')
+    const who = [state.peerName, state.peerHost, state.peerLabel, state.peerSid,
+      state.peerHarness ? `harness: ${state.peerHarness}` : null].filter(Boolean).join(' · ')
     const key = `${who}|${peerV}`
     if (this._versionNotified.has(key)) return
     this._versionNotified.add(key)
@@ -638,6 +657,9 @@ export class Together extends EventEmitter {
       msg.pk = b4a.toString(this.keys.publicKey, 'hex')
       msg.sig = b4a.toString(sign(signable(msg), this.keys.secretKey), 'hex')
     }
+    // After signing: harness is advisory and excluded from the frozen canonical
+    // form, so older peers still verify our signatures.
+    msg.harness = harnessName()
     this.store.markSeen(msgId) // never re-ingest our own message if echoed
     this.store.enqueueOutbound(msg)
     this.store.appendLog(msg)
@@ -665,7 +687,8 @@ export class Together extends EventEmitter {
           name: s.peerName,
           ...(s.peerHost ? { host: s.peerHost } : {}),
           ...(s.peerLabel ? { label: s.peerLabel } : {}),
-          ...(s.peerSid ? { sid: s.peerSid } : {})
+          ...(s.peerSid ? { sid: s.peerSid } : {}),
+          ...(s.peerHarness ? { harness: s.peerHarness } : {})
         }
       })
       const onlineNames = new Set(connectedPeers.map(p => p.name))
@@ -676,6 +699,7 @@ export class Together extends EventEmitter {
           lastSeen: new Date(m.lastSeen).toISOString(),
           ...(m.host ? { host: m.host } : {}),
           ...(m.label ? { label: m.label } : {}),
+          ...(m.harness ? { harness: m.harness } : {}),
           ...(m.pk ? { keyFingerprint: m.pk.slice(0, 12) } : {})
         }))
         .sort((a, b) => (b.online - a.online) || (b.lastSeen < a.lastSeen ? -1 : 1))
@@ -689,7 +713,7 @@ export class Together extends EventEmitter {
     })
     return {
       displayName: this.store.getName(),
-      session: { host: os.hostname().slice(0, 64), label: sessionLabel(), sid: this.sid },
+      session: { host: os.hostname().slice(0, 64), label: sessionLabel(), sid: this.sid, harness: harnessName() },
       rooms,
       pendingInvites: this.pendingInvites.size,
       unreadMessages: this.store.unreadCount()

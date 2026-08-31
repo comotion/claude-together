@@ -28,6 +28,7 @@ function waitFor (emitter, event, pred = () => true, timeoutMs = 45_000) {
 }
 
 process.env.CLAUDE_TOGETHER_LABEL = 'smoke-session'
+process.env.SESSION_MULTIPLAYER_HARNESS = 'smoke-harness'
 
 const testnet = await createTestnet(3)
 const bootstrap = testnet.bootstrap
@@ -74,7 +75,8 @@ console.log('   chat messages carry session identifiers and verify (TOFU)…')
 assert.equal(bobMsg.host, os.hostname().slice(0, 64))
 assert.equal(bobMsg.label, 'smoke-session')
 assert.equal(bobMsg.sid, bob.sid, 'chat carries the sender session id')
-assert.equal(bobMsg.auth, 'verified', 'signature verifies and pins on first contact')
+assert.equal(bobMsg.harness, 'smoke-harness', 'chat carries the sender harness')
+assert.equal(bobMsg.auth, 'verified', 'signature verifies — harness rides outside the signed form')
 
 const gotByBob = waitFor(bob, 'message', m => m.kind === 'chat')
 alice.sendMessage('test-room', 'hey bob, ship it')

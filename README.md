@@ -20,7 +20,7 @@ Built on [Hyperswarm](https://github.com/holepunchto/hyperswarm): peers find eac
 through a public BitTorrent-style DHT, hole-punch a direct UDP connection, and talk over
 Noise-encrypted sockets. Exposed to Claude as an [MCP](https://modelcontextprotocol.io) server.
 
-**Current release: v0.3.0 (LTS)** — per-project room membership, signed messages
+**Current release: v0.3.1 (LTS)** — per-project room membership, signed messages
 (TOFU), session identifiers, and a version handshake. LTS: 0.3.x stays
 wire-compatible; peers on mismatched versions detect and report it in-session.
 
@@ -66,7 +66,7 @@ Or just talk to Claude in any session:
 | You say | What happens |
 |---|---|
 | "create an invite for room `name`" | Creates the room, prints a short single-use code (5 min TTL). Keep your session open until your friend joins. |
-| "join room `X7KQ-2MPF-3HV9`" | Redeems a code from a friend; pairs in a few seconds. Everyone already in the room automatically gets a "`name` joined the room (`hostname` · `session label`)" notice — even members who are offline see it when they reconnect. The label defaults to your project folder name; set `CLAUDE_TOGETHER_LABEL` to override it. |
+| "join room `X7KQ-2MPF-3HV9`" | Redeems a code from a friend; pairs in a few seconds. Everyone already in the room automatically gets a "`name` joined the room (`hostname` · `session label` · `harness`)" notice — even members who are offline see it when they reconnect. The label defaults to your project folder name; set `CLAUDE_TOGETHER_LABEL` to override it. |
 | "send to `name`: …" | Delivers instantly if they're online, otherwise queues on disk and delivers when you're both online. |
 | "check my messages" | Fetches everything unread, across all rooms. |
 | "multiplayer status" | Rooms, connected peers, known members with last-seen times, queued/unread counts. |
@@ -201,7 +201,7 @@ trusted.
   receiving agent. Don't run Claude Together in a session with dangerous auto-approved
   tools while in a room with people you don't trust, and prefer `normal`/`passive` over
   `interrupt` from untrusted senders.
-- **Every message carries your hostname, project-folder name, and a per-session id**
+- **Every message carries your hostname, project-folder name, a per-session id, and a harness tag**
   (so members can tell your machines, projects, and sessions apart). Set
   `CLAUDE_TOGETHER_LABEL` to override the folder name; your machine hostname is
   still sent, and the session id is random per process.

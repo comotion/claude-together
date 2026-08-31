@@ -44,7 +44,8 @@ function render (msgs) {
     'unsigned-expected-signed': ' ⚠ unsigned, but this sender previously signed their messages — possible impersonation or downgrade'
   }
   const lines = msgs.map(m => {
-    const where = [m.host, m.label, m.sid].filter(Boolean).join(' · ')
+    const where = [m.host, m.label, m.sid, m.harness ? `harness: ${m.harness}` : null]
+      .filter(Boolean).join(' · ')
     const warn = warnings[m.auth] || ''
     if (m.kind !== 'presence') {
       const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
