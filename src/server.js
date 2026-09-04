@@ -6,7 +6,7 @@ import b4a from 'b4a'
 import { Store } from './store.js'
 import { Together, VERSION } from './transport.js'
 import { projectDir } from './scope.js'
-import { hash, randomBytes } from './crypto.js'
+import { hash, randomBytes, fingerprint } from './crypto.js'
 
 // Discovery normally bootstraps off the public hyperdht nodes, and peers are then
 // introduced by their public addresses. Two machines behind one restrictive NAT can
@@ -44,11 +44,22 @@ const AUTH_WARNINGS = {
   'unsigned-expected-signed': ' ⚠ unsigned, but this sender previously signed their messages — possible impersonation or downgrade'
 }
 
+// Identity is the key, not the display name — anyone can call themselves anything.
+// First contact says so once, with the fingerprint, so it can actually be checked;
+// afterwards the key is pinned and silence means it still matches.
+function authNote (m) {
+  if (m.auth === 'verified-new' && m.pk) {
+    return ` (first message from this sender — identity key ${fingerprint(m.pk)}, now pinned;` +
+      ' if it matters, have your user check that fingerprint with them out of band)'
+  }
+  return AUTH_WARNINGS[m.auth] || ''
+}
+
 function renderLine (m, withTimestamp) {
   const stamp = withTimestamp ? `[${new Date(m.ts).toISOString()}] ` : ''
   const where = [m.host, m.label, m.sid, m.harness ? `harness: ${m.harness}` : null]
     .filter(Boolean).join(' · ')
-  const warn = AUTH_WARNINGS[m.auth] || ''
+  const warn = authNote(m)
   if (m.kind !== 'presence') {
     const addr = Array.isArray(m.to) && m.to.length ? ` (to: ${m.to.join(', ')})` : ''
     return `${stamp}(room: ${m.roomName}) ${m.from}${where ? ` (${where})` : ''}${addr}: ${m.text}${warn}`

@@ -869,7 +869,9 @@ export class Together extends EventEmitter {
             this.emit('warning', new Error(`dropped message ${id} with invalid signature (claimed sender: ${senderName})`))
             return
           }
-          auth = !pinned || pinned === pkHex ? 'verified' : 'key-changed'
+          // First contact is its own state, not silent success: the fingerprint is
+          // shown once so a human can check it, and pinned from then on.
+          auth = pinned ? (pinned === pkHex ? 'verified' : 'key-changed') : 'verified-new'
         } else if (pinned) {
           auth = 'unsigned-expected-signed'
         }
@@ -891,7 +893,7 @@ export class Together extends EventEmitter {
           ...(typeof msg.harness === 'string' && HARNESS_RE.test(msg.harness) ? { harness: msg.harness } : {}),
           // The signature travels with the message so members catching up later
           // through a friend's log can verify the original sender themselves.
-          ...(auth === 'verified' || auth === 'key-changed' ? { pk: pkHex, sig: sigHex } : {})
+          ...(auth === 'verified' || auth === 'verified-new' || auth === 'key-changed' ? { pk: pkHex, sig: sigHex } : {})
         }
         if (to) relay.to = to
         // Local delivery: an addressed message lands actively only for the named
@@ -911,7 +913,7 @@ export class Together extends EventEmitter {
           host: relay.host,
           label: relay.label,
           harness: relay.harness,
-          ...(auth === 'verified' && !pinned ? { pk: pkHex } : {})
+          ...(auth === 'verified-new' ? { pk: pkHex } : {})
         })
         this.store.pushInbound(inbound)
         this.store.appendLog(relay)

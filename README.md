@@ -227,9 +227,11 @@ trusted.
   **You cannot kick a member.** The only way to exclude someone is for everyone else to
   start a fresh room. There is no forward secrecy: a leaked key exposes past logged
   history and all future messages.
-- **Sender authenticity is trust-on-first-use, not absolute.** Every message is signed
-  with a long-lived per-identity ed25519 key; receivers pin a sender's key the first
-  time they see it and warn loudly if a later message is signed with a different key
+- **Sender authenticity rests on the key, not the name.** Every message is signed
+  with a long-lived per-identity ed25519 key. A key confirmed through a SAS pairing is
+  pinned by that human check; otherwise the first message from a sender says so and
+  shows the fingerprint, and the key is pinned from then on. Later messages signed with
+  a different key warn loudly
   (or arrives unsigned from a sender who used to sign). But the *first* message from a
   name is taken on faith, display names are not unique, and `host`/`label`/`sid` remain
   self-asserted decoration. Treat the warnings as real, and the absence of warnings as

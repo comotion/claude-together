@@ -125,7 +125,41 @@ await paired2
 assert.ok(bob.store.rooms().some(r => r.name === 'sas-room-2'))
 assert.equal(mallory.store.rooms().length, 0, 'the impostor got nothing')
 
-console.log('10. Cancelling stops announcing…')
+console.log('10. After a confirmed pairing, the very first message is already trusted…')
+// Both sides must have the room context proven on the shared socket before sending.
+// A message sent in the window where only the sender has it is delivered into a
+// connection the receiver has not yet bound to that room, and is dropped there.
+async function roomLinked (node, roomName, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const room = node.status().rooms.find(r => r.name === roomName)
+    if (room && room.connectedPeers.length > 0) return
+    await new Promise(r => setTimeout(r, 200))
+  }
+  throw new Error(`${roomName} never got a connected peer`)
+}
+await Promise.all([roomLinked(alice, 'sas-room-2'), roomLinked(bob, 'sas-room-2')])
+const firstMsg = waitFor(bob, 'message', m => m.text === 'hello after pairing')
+alice.sendMessage('sas-room-2', 'hello after pairing')
+const seen = await firstMsg
+assert.equal(seen.auth, 'verified',
+  'a key a human confirmed by number must not be reported as unverified first contact')
+
+console.log('11. Without a pairing, first contact is labelled and pinned…')
+const legacyCode = alice.createInvite('legacy-room').code
+await mallory.joinWithCode(legacyCode)
+const legacyMsg = waitFor(mallory, 'message', m => m.text === 'first ever')
+alice.sendMessage('legacy-room', 'first ever')
+const legacySeen = await legacyMsg
+assert.equal(legacySeen.auth, 'verified-new', 'an unpinned sender must be flagged as new')
+assert.match(legacySeen.pk, /^[0-9a-f]{64}$/, 'the fingerprint must be shown, so it can be checked')
+const legacyRoomId = mallory.store.rooms().find(r => r.name === 'legacy-room').id
+assert.ok(mallory.store.membersFor(legacyRoomId).alice?.pk, 'and pinned from then on')
+const secondMsg = waitFor(mallory, 'message', m => m.text === 'second one')
+alice.sendMessage('legacy-room', 'second one')
+assert.equal((await secondMsg).auth, 'verified', 'the second message is no longer first contact')
+
+console.log('12. Cancelling stops announcing…')
 const third = alice.createPairing('sas-room-3')
 assert.equal(alice.status().pendingPairings.length, 1)
 assert.deepEqual(alice.cancelPairing(third.id), { id: third.id })
