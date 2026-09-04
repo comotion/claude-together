@@ -164,6 +164,23 @@ session id. Set `CLAUDE_TOGETHER_LABEL` per project to make them readable.
 A room name that means two different rooms on this machine is refused rather than
 guessed at, since picking the wrong one would join a conversation you did not mean.
 
+**No restart, and no session needed.** Linking writes a key into the project's store,
+and a session already running there joins the room on its next maintenance pass — about
+half a minute — because that pass re-reads the store precisely to pick up rooms another
+local session joined. A session started later joins at startup. So the same thing can be
+done from a shell, without a session in that directory at all:
+
+```
+node scripts/link-room.js --project /path/to/project --room bug-hunt
+```
+
+The copy is local, but the script does go on the network for a moment so the room's
+other members still get told another session joined; if nobody is online the notice
+queues and goes out later. It resolves the store the way a session in that directory
+would rather than being pointed at a path: a store handed an explicit directory holds
+its own identity, which would mint a second signing key for this machine and make your
+own sessions look like different people to everyone else.
+
 ### Groups, not just co-op
 
 Rooms are N-way meshes, not 1:1 links:
@@ -383,6 +400,8 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
   private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`scripts/statusline.py`](scripts/statusline.py) — Claude Code status line: usage
   gauges plus room, unread and last-message state (`--demo` to preview)
+- [`scripts/link-room.js`](scripts/link-room.js) — add a working directory to a room
+  this machine already holds, without a session in it
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
 - [`test/pairing.js`](test/pairing.js) — SAS pairing and identity pinning
 - [`test/pairing-restart.js`](test/pairing-restart.js) — a rendezvous outliving the process
