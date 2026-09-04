@@ -349,6 +349,8 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
 - [`src/hooks.js`](src/hooks.js) — where delivery hooks live and whether they are installed
 - [`scripts/bootstrap-node.js`](scripts/bootstrap-node.js) — DHT bootstrap node for a
   private network: `npm run bootstrap-node -- --host <lan ip>`
+- [`scripts/statusline.py`](scripts/statusline.py) — Claude Code status line: usage
+  gauges plus room, unread and last-message state (`--demo` to preview)
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
 - [`test/pairing.js`](test/pairing.js) — SAS pairing and identity pinning
 - [`test/pairing-restart.js`](test/pairing-restart.js) — a rendezvous outliving the process
