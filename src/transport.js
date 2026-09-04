@@ -25,7 +25,12 @@ function cmpVersion (a, b) {
 
 const AUTH_TIMEOUT_MS = 30_000
 const PAIR_TIMEOUT_MS = 90_000
-const INVITE_TTL_MS = 5 * 60_000
+// Long enough for a real handoff (say the code on a call, paste it in chat, wait for
+// them to get to their keyboard) without minting a second code. Brute force is not
+// what this bounds: 60 bits behind argon2id-64MB, single-use, guessable only online
+// against a live announce, means even an hour is not attackable. What it bounds is how
+// long a code left in a chat thread stays a working credential.
+const INVITE_TTL_MS = 15 * 60_000
 // Largest single newline-delimited frame we'll buffer from a peer. The biggest
 // legitimate frame is one 16 KB message plus its base64/JSON envelope; 256 KB is
 // generous headroom while still bounding a flood.
