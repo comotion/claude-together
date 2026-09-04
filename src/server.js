@@ -141,6 +141,20 @@ server.registerTool('cancel_pairing', {
     : `No open pairing rendezvous with id ${code}.`)
 })
 
+server.registerTool('link_room', {
+  title: 'Link a room you already hold in another project',
+  description: 'Join a room that another project on THIS machine already belongs to, by copying its key locally. No rendezvous, no number to compare, no network: the key is already on this machine, so nothing new is granted and there is nothing to verify. Use this to add a second working directory to a room you are already in — pairing is for reaching another person, not for moving your own key between your own directories. Each project keeps its own inbox, so both sessions receive every message independently instead of competing to read it. The room\'s other members are told that another of your sessions has joined.',
+  inputSchema: { room_name: z.string().describe('Room name as it appears in the other project, e.g. "bug-hunt"') }
+}, async ({ room_name }) => {
+  const res = together.linkRoom(room_name)
+  if (res.alreadyMember) return text(`This project is already in "${res.name}" — nothing to link.`)
+  return text(
+    `Linked "${res.name}" into this project from ${res.from}. ` +
+    'This session is now a separate peer in the room with its own inbox, and the other ' +
+    'members were told another of your sessions joined.'
+  )
+})
+
 server.registerTool('create_legacy_invite', {
   title: 'Create a pre-0.4 secret invite code',
   description: 'Create a single-use secret invite code using the pre-0.4 pairing scheme. Use this ONLY to pair with a peer still running 0.3.x, which cannot answer a rendezvous. The code IS the secret here: whoever redeems it first within its lifetime gets the room key, with no number to compare and nothing to catch an interceptor, so send it only over a channel you trust and mint a fresh one if it may have leaked. Prefer create_invite whenever both sides run 0.4.',

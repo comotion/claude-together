@@ -13,6 +13,20 @@ const LOG_TRIM_AT = 600
 const MAX_SEEN = 20_000
 const SEEN_COMPACT_AT = 60_000
 
+// Rooms held by another store on this machine, read without instantiating it (that
+// would create directories and run migrations in someone else's store).
+export function roomsInStore (dir) {
+  let config
+  try {
+    config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'))
+  } catch {
+    return []
+  }
+  return Object.entries(config.rooms || {}).map(([id, r]) => ({
+    id, name: r.name, key: b4a.from(r.key, 'base64')
+  }))
+}
+
 // Multi-process-safe persistence. Several Claude Code sessions may each run their own
 // server instance against this same directory, so everything is either append-only
 // (seen.jsonl, log/*.jsonl) or file-per-message keyed by message id (inbox/, outbox/) —

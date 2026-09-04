@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 import Hyperswarm from 'hyperswarm'
 import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import { projectStores } from './scope.js'
+import { roomsInStore } from './store.js'
 import {
   generateInviteCode, deriveCodeKey, derive, topicFor,
   randomBytes, mac, seal, open, timingSafeEqual, hash, sign, verify,
@@ -319,6 +321,59 @@ export class Together extends EventEmitter {
       this._joinTopic(topic)
       this._reproveAll()
     })
+  }
+
+  // Copy a room this machine already holds from another project's store into this one.
+  //
+  // Pairing exists to move a room key between two people with no prior trust, which is
+  // why it costs a rendezvous and a number read aloud. Between two directories the same
+  // person owns there is no second party and no new trust: the key is already here. So
+  // this is local and offline, and it can grant nothing that was not already granted.
+  //
+  // The other members are told, because a second session gaining read access to the
+  // room is their business even when it belongs to someone already in it.
+  linkRoom (roomName) {
+    const wanted = String(roomName || '').trim().toLowerCase()
+    if (!wanted) throw new Error('which room? give the name as it appears in the other project')
+
+    const mine = this.store.roomByName(roomName)
+    if (mine) return { alreadyMember: true, name: mine.name }
+
+    const found = []
+    for (const store of projectStores()) {
+      if (path.resolve(store.dir) === path.resolve(this.store.dir)) continue
+      for (const room of roomsInStore(store.dir)) {
+        if (String(room.name || '').toLowerCase() === wanted) found.push({ ...room, from: store.name })
+      }
+    }
+
+    if (found.length === 0) {
+      const seen = [...new Set(projectStores()
+        .flatMap(s => roomsInStore(s.dir).map(r => r.name)))]
+      throw new Error(seen.length
+        ? `no project on this machine holds a room called "${roomName}". Rooms found elsewhere: ${seen.join(', ')}.`
+        : `no other project on this machine holds any room, so there is nothing to link. Pair into "${roomName}" instead.`)
+    }
+
+    // Same name, different key means two unrelated rooms. Guessing which one is meant
+    // would hand this project into the wrong conversation.
+    const distinct = [...new Set(found.map(r => r.id))]
+    if (distinct.length > 1) {
+      throw new Error(`"${roomName}" names ${distinct.length} different rooms on this machine ` +
+        `(${found.map(r => `${r.id.slice(0, 8)} in ${r.from}`).join(', ')}). ` +
+        'They are not the same conversation — link by pairing instead, so the right one is chosen deliberately.')
+    }
+
+    const room = found[0]
+    this.store.addRoom(room.id, room.name, room.key)
+    this._joinTopic(topicFor(room.key, 'room'))
+    this._reproveAll()
+    this._broadcast(room.id, {
+      text: `linked this room into another project on the same machine (${sessionLabel()})`,
+      priority: 'normal',
+      kind: 'presence'
+    })
+    return { name: room.name, id: room.id, from: room.from }
   }
 
   // --- SAS pairing ---

@@ -88,6 +88,7 @@ Or just talk to Claude in any session:
 | "multiplayer status" | Rooms, connected peers, known members with last-seen times, queued/unread counts. |
 | "show the history of `name`" | Re-reads the recent room log (last 200 msgs / 7 days) without touching your unread inbox. |
 | "set my display name to …" | The name shown on your messages. |
+| "link room `name`" | Adds *this* project to a room another project on this machine is already in, by copying the key locally. No pairing, no network. |
 | "leave room `name`" | Deletes the room key, stops announcing on the DHT, and closes the room's connections. |
 
 **Version mismatches are detected on connect.** Sessions exchange their
@@ -131,6 +132,37 @@ decides whose session is actively notified.
 Every injected message is framed as untrusted data with an explicit instruction to
 relay it to the human and ask before acting on anything it requests — a friend's
 message can inform your Claude, never command it.
+
+### Several working directories, one room
+
+Room membership belongs to the project directory, so a room you joined in one checkout
+is not joined in another. To add a second directory, ask Claude there to **link** the
+room:
+
+```
+you (in ~/code/other-thing): "link the bug-hunt room"
+→ copies the key from your other project, joins the topic, and you appear to the room
+  as a second peer
+```
+
+This is a local copy, not a pairing. Pairing exists to move a room key between two
+people who have no prior trust, which is what the rendezvous and the spoken number are
+for; between two directories the same person owns there is no second party and no new
+trust, and the key is already on the machine. So there is nothing to compare and
+nothing new is granted. The room's other members are told another of your sessions
+joined, because a second session gaining read access is their business.
+
+Each project keeps its **own inbox**, which is the reason not to point every session at
+one shared store instead: reading an inbox deletes what it read, so sessions sharing one
+would compete and each message would reach whichever session happened to look first.
+With separate stores every session receives every message.
+
+Your identity key is machine-global, so all your sessions sign with the same key and
+peers see one member with several connected peers, told apart by project label and
+session id. Set `CLAUDE_TOGETHER_LABEL` per project to make them readable.
+
+A room name that means two different rooms on this machine is refused rather than
+guessed at, since picking the wrong one would join a conversation you did not mean.
 
 ### Groups, not just co-op
 
@@ -356,6 +388,7 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
 - [`test/pairing-restart.js`](test/pairing-restart.js) — a rendezvous outliving the process
 - [`test/interrupts.js`](test/interrupts.js) — receiver-side interrupt opt-in
 - [`test/outbox.js`](test/outbox.js) — at-least-once retry of queued messages
+- [`test/link.js`](test/link.js) — a second working directory joining a room locally
 - [`test/register.js`](test/register.js) — per-project hook installation
 
 ## License
