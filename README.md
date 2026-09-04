@@ -193,6 +193,13 @@ channel an attacker on the rendezvous does not control (a call, in person), neve
 same chat you pasted the id into. `confirm_pairing` exists so that step is a deliberate
 human act; Claude is told never to perform it on your behalf.
 
+An open rendezvous is kept in the store, so it survives restarting Claude Code: an id
+you shared yesterday still works today, and only completing it or `cancel_pairing` ends
+it. The agreement key is stored with it, so the number this side shows does not change
+across a restart — otherwise a peer still holding the old number would see a second
+entry appear under the same name with a different number, which is exactly the shape of
+the impersonation the comparison is there to catch.
+
 Multiple peers may answer the same public rendezvous — that is expected, not an attack
 in itself. Each gets its own number, `status` lists them side by side with the name,
 host and key fingerprint, and confirming a number is what selects which one you paired
@@ -343,6 +350,7 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
   private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
 - [`test/pairing.js`](test/pairing.js) — SAS pairing and identity pinning
+- [`test/pairing-restart.js`](test/pairing-restart.js) — a rendezvous outliving the process
 - [`test/interrupts.js`](test/interrupts.js) — receiver-side interrupt opt-in
 - [`test/outbox.js`](test/outbox.js) — at-least-once retry of queued messages
 - [`test/register.js`](test/register.js) — per-project hook installation

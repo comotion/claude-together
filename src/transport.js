@@ -158,6 +158,36 @@ export class Together extends EventEmitter {
 
     for (const room of this.store.rooms()) this._joinTopic(topicFor(room.key, 'room'))
 
+    // Rendezvous outlive the process that opened them: an id already shared has to
+    // keep working after a restart, or "it does not expire" is only true until someone
+    // restarts Claude Code. Peers re-announce themselves, so the peer list rebuilds
+    // itself; only the session has to come back.
+    for (const saved of this.store.pairings()) {
+      const topic = rendezvousTopic(saved.id)
+      const hex = b4a.toString(topic, 'hex')
+      const session = {
+        id: saved.id,
+        role: saved.role,
+        roomId: saved.roomId,
+        roomName: saved.roomName,
+        eph: saved.eph,
+        nonce: saved.nonce,
+        topic,
+        hex,
+        peers: new Map(),
+        granted: false,
+        resolve: null
+      }
+      this.pendingPairs.set(hex, session)
+      this._joinTopic(topic)
+      if (session.role === 'joiner') {
+        session.retry = setInterval(() => {
+          this.discoveries.get(hex)?.refresh().catch(() => {})
+        }, 4_000)
+        if (session.retry.unref) session.retry.unref()
+      }
+    }
+
     // Hyperswarm's own DHT re-query cadence is ~10 minutes; that's too slow for
     // "my friend just came online". Nudge lookups for rooms with no live peers,
     // and pick up rooms another local session joined since we started.
@@ -354,6 +384,7 @@ export class Together extends EventEmitter {
       granted: false
     }
     this.pendingPairs.set(hex, session)
+    this.store.savePairing(session)
     this._joinTopic(topic)
     for (const conn of this.conns) this._sendPairHello(conn, session)
     return { id, roomName: room.name }
@@ -380,6 +411,7 @@ export class Together extends EventEmitter {
       resolve: null
     }
     this.pendingPairs.set(hex, session)
+    this.store.savePairing(session)
     this._joinTopic(topic)
     // The other side's announce may land after our first query, and hyperswarm's own
     // refresh cadence is minutes. Keep looking for as long as the rendezvous is open.
@@ -437,6 +469,7 @@ export class Together extends EventEmitter {
   _closePairing (session) {
     clearInterval(session.retry)
     this.pendingPairs.delete(session.hex)
+    this.store.removePairing(session.id)
     this._leaveTopic(session.topic)
   }
 

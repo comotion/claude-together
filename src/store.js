@@ -181,6 +181,54 @@ export class Store {
     }))
   }
 
+  // --- open pairings, kept across restarts ---
+  //
+  // A rendezvous id is public and has no expiry, so the only thing that used to end
+  // one was this process exiting — which made "it does not expire" untrue in the way
+  // that matters: share an id, restart, and your friend is answering a rendezvous
+  // nobody is listening on, with nothing to tell them so.
+  //
+  // The agreement key is stored with it. Regenerating it on restore would change the
+  // number this side shows, so a peer holding the old one would see a second entry
+  // appear under the same name with a different number — the exact shape of the
+  // impersonation the comparison exists to catch. It is an ephemeral per-pairing
+  // secret in a store that already holds the room keys and the signing key.
+
+  savePairing (p) {
+    const c = this._config()
+    c.pairings = c.pairings || {}
+    c.pairings[p.id] = {
+      role: p.role,
+      roomId: p.roomId || null,
+      roomName: p.roomName || null,
+      ephPublicKey: b4a.toString(p.eph.publicKey, 'base64'),
+      ephSecretKey: b4a.toString(p.eph.secretKey, 'base64'),
+      nonce: b4a.toString(p.nonce, 'base64')
+    }
+    this._writeJson('config.json', c)
+  }
+
+  pairings () {
+    return Object.entries(this._config().pairings || {}).map(([id, p]) => ({
+      id,
+      role: p.role,
+      roomId: p.roomId || null,
+      roomName: p.roomName || null,
+      eph: {
+        publicKey: b4a.from(p.ephPublicKey, 'base64'),
+        secretKey: b4a.from(p.ephSecretKey, 'base64')
+      },
+      nonce: b4a.from(p.nonce, 'base64')
+    }))
+  }
+
+  removePairing (id) {
+    const c = this._config()
+    if (!c.pairings || !c.pairings[id]) return
+    delete c.pairings[id]
+    this._writeJson('config.json', c)
+  }
+
   roomByName (name) {
     const matches = this.rooms().filter(r => r.name.toLowerCase() === name.toLowerCase())
     return matches[0] || null

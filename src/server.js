@@ -93,7 +93,7 @@ function renderPairing (view, opening) {
 
 server.registerTool('create_invite', {
   title: 'Create a room and open a pairing rendezvous',
-  description: 'Create (or reuse) a named room and open a pairing rendezvous, returning a short id (like X7KQ-2MPF-3HV9). The id is NOT a secret and NOT a password — it only names a meeting point, so it never expires and it is safe to paste in a chat channel. Anyone who has it can answer, and that is expected: when someone does, both sides are shown a six-digit number derived from the connection, and the pairing only completes when both humans confirm the SAME number out of band (see confirm_pairing). Rooms are scoped to this project directory. Keep this session open until the pairing completes.',
+  description: 'Create (or reuse) a named room and open a pairing rendezvous, returning a short id (like X7KQ-2MPF-3HV9). The id is NOT a secret and NOT a password — it only names a meeting point, so it is safe to paste in a chat channel and it never expires, surviving a restart of Claude Code. Anyone who has it can answer, and that is expected: when someone does, both sides are shown a six-digit number derived from the connection, and the pairing only completes when both humans confirm the SAME number out of band (see confirm_pairing). Rooms are scoped to this project directory. Keep this session open until the pairing completes.',
   inputSchema: { room_name: z.string().describe('Name for the room, e.g. "auth-refactor"') }
 }, async ({ room_name }) => {
   const p = together.createPairing(room_name)
