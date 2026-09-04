@@ -16,12 +16,16 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { projectDir } from '../src/scope.js'
 
-// Recognize our own hook entries regardless of how the repo folder is spelled
-// (claude-together, ClaudeTogether, …): normalize case and hyphens, and require
-// the hook script name so unrelated commands can't match.
-function isOurs (command) {
-  const c = String(command || '').toLowerCase().replace(/-/g, '')
-  return c.includes('claudetogether') && c.includes('hook.js')
+// Recognize our own hook entries. The reliable test is the absolute path of the hook
+// script this checkout would install: it is what we wrote, whatever the folder is
+// called. The name heuristic stays as a fallback so entries written by a checkout at
+// a path we no longer know (an older clone, since moved) are still recognized and
+// cleaned up; it requires the script name too, so unrelated commands can't match.
+function isOurs (command, hookScript) {
+  const c = String(command || '')
+  if (hookScript && c.includes(hookScript)) return true
+  const norm = c.toLowerCase().replace(/-/g, '')
+  return norm.includes('claudetogether') && norm.includes('hook.js')
 }
 
 function readSettings (settingsPath) {
@@ -52,7 +56,7 @@ export function installHooks (target = projectDir()) {
   for (const [event, entries] of Object.entries(wanted)) {
     const existing = settings.hooks[event] || []
     const others = existing.filter(e =>
-      !(e.hooks || []).some(h => isOurs(h.command)))
+      !(e.hooks || []).some(h => isOurs(h.command, hookScript)))
     settings.hooks[event] = [...others, ...entries]
   }
 
@@ -65,12 +69,14 @@ export function installHooks (target = projectDir()) {
 // stop. Removes only our own entries; returns the events it cleaned, or [] if there
 // was nothing there.
 export function removeUserWideHooks () {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const hookScript = path.join(root, 'scripts', 'hook.js')
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
   if (!fs.existsSync(settingsPath)) return { settingsPath, events: [] }
   const settings = readSettings(settingsPath)
   const events = []
   for (const [event, entries] of Object.entries(settings.hooks || {})) {
-    const kept = entries.filter(e => !(e.hooks || []).some(h => isOurs(h.command)))
+    const kept = entries.filter(e => !(e.hooks || []).some(h => isOurs(h.command, hookScript)))
     if (kept.length === entries.length) continue
     events.push(event)
     if (kept.length > 0) settings.hooks[event] = kept
