@@ -273,10 +273,10 @@ isn't always allowed to solve, and being on the same LAN does not help: discover
 global-DHT-only, so both sides are introduced by public address and then fail to
 hole-punch back into their own network. Both sides simply time out.
 
-Run a DHT bootstrap node inside the network instead, on any machine both can reach:
+Run a small DHT cluster inside the network instead, on any machine both can reach:
 
 ```
-npm run bootstrap-node -- --host <lan ip>     # leave running; defaults to port 49737
+npm run bootstrap-node -- --host <lan ip>     # leave running; port 49737, 3 members
 ```
 
 Then point every session at it and restart them:
@@ -285,9 +285,50 @@ Then point every session at it and restart them:
 CLAUDE_TOGETHER_BOOTSTRAP=<lan ip>:49737
 ```
 
-Discovery and the hole punch then stay entirely inside the LAN. `status` reports which
+Discovery and the connection then stay entirely inside the LAN. `status` reports which
 bootstrap a session is using — sessions on different bootstraps form separate DHTs and
 cannot see each other, so the value must match everywhere.
+
+**It has to be a cluster, not one node.** hyperdht keeps a node ephemeral and firewalled
+until several distinct nodes can vouch for its reachability, and a node in neither state
+joins no routing table. Point two sessions at a lone bootstrapper and they announce on a
+topic, find each other, and then never connect: every connection falls back to a hole
+punch with nobody to coordinate it. From the outside that is indistinguishable from a
+peer who never showed up — no error, no peer, nothing in either log. hyperdht's own
+testnet starts its nodes with ephemeral and firewalled both off for the same reason.
+
+The host must be an address your peers can reach. Not a hostname: it is handed to peers
+as the address to talk to, and a name like `myhost` usually resolves to `127.0.1.1`
+locally and to nothing at all on theirs, which leaves your session advertising a
+loopback address.
+
+To keep it up across reboots, run it under systemd as your own user:
+
+```ini
+# ~/.config/systemd/user/claude-together-bootstrap.service
+[Unit]
+Description=Claude Together private DHT bootstrap cluster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/claude-together-bootstrap.env
+ExecStart=/path/to/node /path/to/claude-together/scripts/bootstrap-node.js \
+  --host ${HOST} --port ${PORT} --nodes ${NODES}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+with `HOST`, `PORT` and `NODES` in `~/.config/claude-together-bootstrap.env`, then:
+
+```
+systemctl --user daemon-reload
+systemctl --user enable --now claude-together-bootstrap
+sudo loginctl enable-linger $USER    # or it only runs while you are logged in
+```
 
 ## Repo layout
 
