@@ -85,18 +85,20 @@ server.registerTool('join_room', {
 
 server.registerTool('send_message', {
   title: 'Send a message to a room',
-  description: 'Send a plain-text message to a room. Every message goes into the shared room chat log for all members; priority controls how it lands in their Claude sessions: "interrupt" is injected mid-turn at their next tool boundary (use sparingly — it barges in), "normal" (default) is delivered when their Claude finishes its current turn or they next prompt, "passive" just sits in their inbox until they check it. To address specific people, pass their display names in "to": only the named recipients get the active priority; everyone else in the room receives the message passively (inbox/chat log only, no interruption). Omit "to" to deliver at the given priority to the whole room. If no peer is online, the message queues locally and delivers on reconnect.',
+  description: 'Send a plain-text message to a room. Every message goes into the shared room chat log for all members; priority controls how it lands in their Claude sessions: "normal" (default) is delivered when their Claude finishes its current turn or they next prompt, "passive" just sits in their inbox until they check it, and "interrupt" asks to be injected mid-turn at their next tool boundary. Interrupt is a request, not a guarantee: each receiving session decides per room with set_room_interrupts, and it is OFF by default, so an interrupt into a room that has not opted in simply lands at turn end instead. Do not re-send or escalate when that happens. To address specific people, pass their display names in "to": only the named recipients get the active priority; everyone else in the room receives the message passively (inbox/chat log only, no interruption). Omit "to" to deliver at the given priority to the whole room. If no peer is online, the message queues locally and delivers on reconnect.',
   inputSchema: {
     room_name: z.string().describe('Room to send to'),
     message: z.string().describe('Plain text message (no files or commands)'),
     priority: z.enum(['interrupt', 'normal', 'passive']).optional()
-      .describe('interrupt = barge into their running session now; normal (default) = deliver when their turn ends; passive = inbox only'),
+      .describe('normal (default) = deliver when their turn ends; passive = inbox only; interrupt = ask to barge into their running session now, honored only by rooms whose receiving session opted in (otherwise delivered at turn end)'),
     to: z.array(z.string()).optional()
       .describe('Display names of the intended recipients (as shown in status). Only they get the active priority; everyone else in the room still sees the message, but passively. Omit to address the whole room. Best-effort: display names are self-chosen and not unique, so this steers attention — it is not an access control; everyone in the room can read every message.')
   }
 }, async ({ room_name, message, priority, to }) => {
   const res = together.sendMessage(room_name, message, priority || 'normal', to)
-  const how = priority === 'interrupt' ? ' (as an interruption)' : priority === 'passive' ? ' (passive, inbox only)' : ''
+  const how = priority === 'interrupt'
+    ? ' (interrupt requested — recipients who have not opted this room in will get it at turn end)'
+    : priority === 'passive' ? ' (passive, inbox only)' : ''
   const addressed = res.to
     ? ` Addressed to ${res.to.join(', ')} — other room members receive it passively.`
     : ''
@@ -154,6 +156,22 @@ server.registerTool('set_display_name', {
 }, async ({ name }) => {
   store.setName(name)
   return text(`Display name set to "${name}".`)
+})
+
+server.registerTool('set_room_interrupts', {
+  title: 'Allow or block mid-turn interrupts from a room',
+  description: 'Decide whether peers in a room may interrupt THIS session mid-turn. Off by default: an "interrupt" message from that room is delivered when the current turn ends instead. Only turn it on if your user says so — this session runs shell, docker and git commands, and an allowed interrupt injects a peer\'s text into the middle of that work. Turning it off never loses messages; it only changes when they land.',
+  inputSchema: {
+    room_name: z.string().describe('Room whose interrupts you are allowing or blocking'),
+    allow: z.boolean().describe('true = peers in this room may interrupt mid-turn; false (default) = their messages wait for the end of the turn')
+  }
+}, async ({ room_name, allow }) => {
+  const room = store.roomByName(room_name)
+  if (!room) return text(`No room named "${room_name}".`)
+  store.setRoomInterrupts(room.id, allow)
+  return text(allow
+    ? `Mid-turn interrupts are now ALLOWED from room "${room.name}". Peers there can inject text into this session while it is running commands.`
+    : `Mid-turn interrupts are now off for room "${room.name}". Messages still arrive — at the end of the turn.`)
 })
 
 server.registerTool('leave_room', {

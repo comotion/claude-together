@@ -67,7 +67,7 @@ natural language — both end up calling the same MCP tools.
 | `/together-join X7KQ-2MPF-3HV9` | redeem a friend's code |
 | `/together-send bug-hunt found it, check session.ts` | send a message (lands when their turn ends) |
 | `/together-send bug-hunt to alice: here's that stack trace` | address specific people — only they get active delivery |
-| `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session |
+| `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session (if that room opted in) |
 | `/together-inbox` | check new + passive messages |
 | `/together-history bug-hunt` | re-read recent room chat (non-destructive) |
 | `/together-status` | rooms, peers, members + last seen, queues |
@@ -100,9 +100,18 @@ surfaces your own mid-turn messages:
 
 | Priority | How it lands on the other side |
 |---|---|
-| `interrupt` (`/together-interrupt`) | Injected **mid-turn** at their Claude's next tool boundary — barges into running work. For "stop, don't merge that". |
 | `normal` (`/together-send`, default) | Delivered the moment their Claude **finishes its current turn** (or when they next prompt, if idle). |
+| `interrupt` (`/together-interrupt`) | *Requests* injection **mid-turn** at their Claude's next tool boundary. Honored only by rooms the receiver opted in (below); otherwise it lands at turn end. |
 | `passive` | Never injected. Waits quietly for `/together-inbox`. |
+
+**Interrupts are opt-in, per room, on the receiving side.** They are off by default,
+because the session being interrupted runs shell, docker and git commands, and a
+mid-turn injection arrives in the middle of that work — so whether a peer may barge
+in is the receiver's call, not the sender's. Turn it on for a room you trust by
+asking your Claude ("allow interrupts from bug-hunt"), and off again the same way;
+`status` shows the current setting per room. Opting out never loses messages, it only
+means they land at the end of the turn. Senders are told the interrupt may be
+downgraded, so nobody reads a lack of barge-in as the message not arriving.
 
 **Addressing specific people.** Any message can carry a "to" list of display names
 (`/together-send bug-hunt to alice: …`, or just "tell alice …"). Every member still
@@ -210,8 +219,9 @@ trusted.
   (mid-turn for `interrupt` priority, when the agent has tool access). The untrusted-data
   framing reduces but does not eliminate the risk that a crafted message manipulates the
   receiving agent. Don't run Claude Together in a session with dangerous auto-approved
-  tools while in a room with people you don't trust, and prefer `normal`/`passive` over
-  `interrupt` from untrusted senders.
+  tools while in a room with people you don't trust. Mid-turn injection is off unless
+  you opted that room in, which is the setting to leave alone for any room you don't
+  fully trust — but `normal` delivery still reaches the same agent, one turn later.
 - **Every message carries your hostname, project-folder name, a per-session id, and a harness tag**
   (so members can tell your machines, projects, and sessions apart). Set
   `CLAUDE_TOGETHER_LABEL` to override the folder name; your machine hostname is
@@ -269,6 +279,7 @@ cannot see each other, so the value must match everywhere.
 - [`scripts/bootstrap-node.js`](scripts/bootstrap-node.js) — DHT bootstrap node for a
   private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
+- [`test/interrupts.js`](test/interrupts.js) — receiver-side interrupt opt-in
 - [`test/register.js`](test/register.js) — per-project hook installation
 
 ## License

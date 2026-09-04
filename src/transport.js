@@ -563,6 +563,10 @@ export class Together extends EventEmitter {
         // A gossiped/replayed "interrupt" from hours ago shouldn't barge into a
         // session now — urgency expires.
         if (localPriority === 'interrupt' && Date.now() - ts > 5 * 60_000) localPriority = 'normal'
+        // Barging in is the receiver's decision, not the sender's: this session runs
+        // shell, docker and git, and a mid-turn injection lands while it is doing so.
+        // Unless this room was opted in, the message still arrives — at turn end.
+        if (localPriority === 'interrupt' && !room.allowInterrupt) localPriority = 'normal'
         const inbound = { ...relay, priority: localPriority, auth }
         this.store.touchMember(roomId, inbound.from, ts, {
           host: relay.host,
@@ -706,6 +710,7 @@ export class Together extends EventEmitter {
       return {
         name: r.name,
         id: r.id,
+        interrupts: r.allowInterrupt ? 'allowed mid-turn' : 'off — messages land at turn end',
         connectedPeers,
         members,
         pendingOutbound: this.store.outboundFor(r.id).length

@@ -133,7 +133,23 @@ export class Store {
 
   addRoom (id, name, keyBuf) {
     const c = this._config()
-    c.rooms[id] = { name, key: b4a.toString(keyBuf, 'base64') }
+    // Re-adding a room (a fresh invite into one you're already in) must not silently
+    // re-arm interrupts: carry the existing choice over.
+    c.rooms[id] = {
+      name,
+      key: b4a.toString(keyBuf, 'base64'),
+      allowInterrupt: c.rooms[id]?.allowInterrupt === true
+    }
+    this._writeJson('config.json', c)
+  }
+
+  // Mid-turn interrupts are opt-in per room, and the choice belongs to the receiving
+  // session: it runs shell, docker and git, so whether a peer may barge into its turn
+  // is not the sender's call. Off means the message still arrives, at turn end.
+  setRoomInterrupts (id, allow) {
+    const c = this._config()
+    if (!c.rooms[id]) throw new Error(`no room with id ${id} in this project's store`)
+    c.rooms[id].allowInterrupt = allow === true
     this._writeJson('config.json', c)
   }
 
@@ -161,7 +177,7 @@ export class Store {
 
   rooms () {
     return Object.entries(this._config().rooms).map(([id, r]) => ({
-      id, name: r.name, key: b4a.from(r.key, 'base64')
+      id, name: r.name, key: b4a.from(r.key, 'base64'), allowInterrupt: r.allowInterrupt === true
     }))
   }
 
