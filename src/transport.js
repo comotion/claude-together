@@ -134,6 +134,11 @@ export class Together extends EventEmitter {
     // its own entry in session.peers with its own SAS, and the human picks by reading
     // the number back, which is what makes an impostor fail.
     this.pendingPairs = new Map()
+    // Why recent pairing attempts were turned away. A rejected attempt is invisible to
+    // both sides otherwise: the peer just sees a connection that goes nowhere, and
+    // there is nothing to distinguish "nobody answered" from "someone answered and was
+    // refused". Surfaced in status, newest last.
+    this.pairRejections = []
     this._versionNotified = new Set()    // peer+version pairs already surfaced this process
   }
 
@@ -294,6 +299,12 @@ export class Together extends EventEmitter {
   // side and that changes the number it sees. The room key is then encrypted to the
   // agreed secret, so a passive relay that forwards everything untouched still learns
   // nothing. Nothing here expires: secrecy is not what is protecting the exchange.
+
+  _pairReject (reason, detail = {}) {
+    this.pairRejections.push({ at: new Date().toISOString(), reason, ...detail })
+    if (this.pairRejections.length > 20) this.pairRejections.shift()
+    this.emit('warning', new Error(`pairing attempt refused: ${reason}`))
+  }
 
   _pairSessionFor (id) {
     const want = normalizeCode(String(id || ''))
@@ -504,8 +515,15 @@ export class Together extends EventEmitter {
     }
     conn._ct = state
 
-    // A peer that never proves any shared key gets dropped.
-    state.authTimer = setTimeout(() => conn.destroy(), AUTH_TIMEOUT_MS)
+    // A peer that never proves any shared key gets dropped. Say so: from the far side
+    // this looks like a connection that simply died, and it is the shape a version or
+    // protocol mismatch takes — the peers find each other and then talk past each other.
+    state.authTimer = setTimeout(() => {
+      this._pairReject('peer connected but completed no handshake within 30s — likely a different protocol or version on the other side', {
+        openRendezvous: [...this.pendingPairs.values()].map(s => s.id)
+      })
+      conn.destroy()
+    }, AUTH_TIMEOUT_MS)
 
     // Rendezvous ids are public, so there is nothing to withhold until the peer
     // proves something: announce our open rendezvous and let the SAS sort out who
@@ -678,20 +696,48 @@ export class Together extends EventEmitter {
 
       case 'pair-hello': {
         const session = this._pairSessionFor(msg.id)
-        if (!session || session.granted) return
+        if (!session) {
+          this._pairReject('no rendezvous open with that id here', { theirId: String(msg.id || '').slice(0, 32) })
+          return
+        }
+        if (session.granted) {
+          this._pairReject('rendezvous already completed', { id: session.id })
+          return
+        }
         if (session.peers.has(conn)) return
         const pk = hexBytes(msg.pk, 32)
         const epk = hexBytes(msg.epk, 32)
         const nonce = hexBytes(msg.nonce, 24)
         const sig = hexBytes(msg.sig, 64)
-        if (!pk || !epk || !nonce || !sig) return
+        if (!pk || !epk || !nonce || !sig) {
+          this._pairReject('malformed hello — a key, nonce or signature field was missing or the wrong size', {
+            id: session.id,
+            got: { pk: typeof msg.pk === 'string' ? msg.pk.length : null, epk: typeof msg.epk === 'string' ? msg.epk.length : null, nonce: typeof msg.nonce === 'string' ? msg.nonce.length : null, sig: typeof msg.sig === 'string' ? msg.sig.length : null },
+            peerVersion: typeof msg.v === 'string' ? msg.v : 'unknown'
+          })
+          return
+        }
         // The signature is what binds this ephemeral key to that identity key. Without
         // it a relay could offer its own ephemeral key under someone else's name and
         // still show a matching number.
-        if (!verify(helloSignable(session.id, pk, epk, nonce), sig, pk)) return
-        if (b4a.equals(pk, this.keys.publicKey)) return
+        if (!verify(helloSignable(session.id, pk, epk, nonce), sig, pk)) {
+          this._pairReject('hello signature did not verify — the peer signed for a different rendezvous id, or its build derives the signed bytes differently', {
+            id: session.id,
+            peerName: String(msg.name || 'unknown').slice(0, 64),
+            peerVersion: typeof msg.v === 'string' ? msg.v : 'unknown',
+            ourVersion: VERSION
+          })
+          return
+        }
+        if (b4a.equals(pk, this.keys.publicKey)) {
+          this._pairReject('a session using this same identity key answered — pair between two different identities', { id: session.id })
+          return
+        }
         const secret = agree(session.eph.secretKey, epk)
-        if (!secret) return
+        if (!secret) {
+          this._pairReject('key agreement failed — the peer offered a degenerate agreement key', { id: session.id })
+          return
+        }
         const transcript = pairingTranscript(
           session.id,
           { pk: this.keys.publicKey, epk: session.eph.publicKey },
@@ -737,10 +783,15 @@ export class Together extends EventEmitter {
         const session = this._pairSessionFor(msg.id)
         if (!session) return
         const peer = session.peers.get(conn)
-        if (!peer) return
+        if (!peer) {
+          this._pairReject('confirmation from a peer that never said hello', { id: session.id })
+          return
+        }
         const sig = hexBytes(msg.sig, 64)
-        if (!sig) return
-        if (!verify(confirmSignable(peer.transcript), sig, peer.pk)) return
+        if (!sig || !verify(confirmSignable(peer.transcript), sig, peer.pk)) {
+          this._pairReject('confirmation signature did not verify', { id: session.id, peerName: peer.name })
+          return
+        }
         peer.peerConfirmed = true
         this._maybeGrant(session, conn, peer)
         break
@@ -1063,6 +1114,7 @@ export class Together extends EventEmitter {
       rooms,
       pendingInvites: this.pendingInvites.size,
       pendingPairings: [...this.pendingPairs.values()].map(s => this._pairingView(s)),
+      ...(this.pairRejections.length ? { recentPairingRejections: this.pairRejections } : {}),
       unreadMessages: this.store.unreadCount()
     }
   }
