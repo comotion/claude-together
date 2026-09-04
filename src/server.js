@@ -6,6 +6,7 @@ import b4a from 'b4a'
 import { Store } from './store.js'
 import { Together, VERSION } from './transport.js'
 import { projectDir } from './scope.js'
+import { hooksStatus } from './hooks.js'
 import { hash, randomBytes, fingerprint } from './crypto.js'
 
 // Discovery normally bootstraps off the public hyperdht nodes, and peers are then
@@ -218,7 +219,7 @@ server.registerTool('show_history', {
 
 server.registerTool('status', {
   title: 'Multiplayer status',
-  description: 'Show your display name, rooms joined by this project, currently connected peers, known room members with last-seen times, queued undelivered messages, and unread count.',
+  description: 'Show your display name, rooms joined by this project, currently connected peers, known room members with last-seen times, queued undelivered messages, unread count, which bootstrap discovery uses, and whether delivery hooks are installed for this project. If they are not, say so when reporting status: incoming messages will not appear on their own until check_messages is called.',
   inputSchema: {}
 }, async () => {
   const scope = process.env.CLAUDE_TOGETHER_DIR
@@ -227,7 +228,10 @@ server.registerTool('status', {
   const discovery = bootstrap
     ? `custom bootstrap (CLAUDE_TOGETHER_BOOTSTRAP=${bootstrap.join(',')}) — peers must use the same`
     : 'public hyperdht bootstrap nodes'
-  return text(JSON.stringify({ scope, discovery, ...together.status() }, null, 2))
+  // Whether messages arrive by themselves is not something the user can see anywhere
+  // else: a project with no hooks looks exactly like a room where nobody is talking.
+  const delivery = hooksStatus().summary
+  return text(JSON.stringify({ scope, discovery, delivery, ...together.status() }, null, 2))
 })
 
 server.registerTool('set_display_name', {

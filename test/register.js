@@ -84,5 +84,41 @@ assert.deepEqual(removeUserWideHooks().events, [], 'second run removes nothing')
 fs.rmSync(userSettings)
 assert.deepEqual(removeUserWideHooks().events, [], 'missing file is not an error')
 
-for (const d of [fakeHome, projectA, projectB]) fs.rmSync(d, { recursive: true, force: true })
+console.log('8. Hook state is reported for a project, not guessed at…')
+const { hooksStatus, HOOK_EVENTS } = await import('../src/hooks.js')
+const projectC = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-projC-'))
+const missing = hooksStatus(projectC)
+assert.equal(missing.installed, false)
+assert.match(missing.summary, /NO delivery hooks/)
+assert.match(missing.summary, /check_messages/, 'must say what happens to messages meanwhile')
+
+installHooks(projectC)
+const present = hooksStatus(projectC)
+assert.equal(present.installed, true)
+assert.equal(present.complete, true)
+assert.deepEqual(present.events.sort(), [...HOOK_EVENTS].sort())
+assert.equal(present.scope, 'project')
+
+console.log('9. A partial install is reported as partial, not as installed…')
+const partial = JSON.parse(fs.readFileSync(settingsOf(projectC), 'utf8'))
+delete partial.hooks.Stop
+fs.writeFileSync(settingsOf(projectC), JSON.stringify(partial, null, 2))
+const half = hooksStatus(projectC)
+assert.equal(half.installed, true)
+assert.equal(half.complete, false, 'two of three events is not installed')
+assert.match(half.summary, /PARTLY/)
+assert.match(half.summary, /Stop/, 'must name the event that is missing')
+
+console.log('10. Unparseable settings say so, rather than claiming no hooks…')
+const projectD = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-projD-'))
+fs.mkdirSync(path.join(projectD, '.claude'), { recursive: true })
+fs.writeFileSync(settingsOf(projectD), '{ this is not json')
+const broken = hooksStatus(projectD)
+assert.equal(broken.installed, false)
+assert.match(broken.summary, /cannot tell/, 'a file we cannot read is not proof hooks are absent')
+assert.match(broken.summary, /not valid JSON/)
+
+for (const d of [fakeHome, projectA, projectB, projectC, projectD]) {
+  fs.rmSync(d, { recursive: true, force: true })
+}
 console.log('\nAll per-project registration tests passed.')

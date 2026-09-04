@@ -346,6 +346,7 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
 - [`src/crypto.js`](src/crypto.js) — rendezvous ids, SAS derivation, X25519 agreement, signatures, secretbox
 - [`src/store.js`](src/store.js) — persistence: identity, room keys, inbox/outbox
 - [`src/scope.js`](src/scope.js) — per-project store scoping (shared by server and hooks)
+- [`src/hooks.js`](src/hooks.js) — where delivery hooks live and whether they are installed
 - [`scripts/bootstrap-node.js`](scripts/bootstrap-node.js) — DHT bootstrap node for a
   private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
