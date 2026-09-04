@@ -223,6 +223,29 @@ to your inbox, and start a new room if it might have leaked.
   hole punching can fail (~5% of pairings). Easiest fix: both install
   [Tailscale](https://tailscale.com) — the swarm then finds the direct tailnet path.
 
+### Corporate networks: use your own bootstrap node
+
+Peers behind one restrictive corporate NAT hit a variant of the above that Tailscale
+isn't always allowed to solve, and being on the same LAN does not help: discovery is
+global-DHT-only, so both sides are introduced by public address and then fail to
+hole-punch back into their own network. Both sides simply time out.
+
+Run a DHT bootstrap node inside the network instead, on any machine both can reach:
+
+```
+npm run bootstrap-node -- --host <lan ip>     # leave running; defaults to port 49737
+```
+
+Then point every session at it and restart them:
+
+```
+CLAUDE_TOGETHER_BOOTSTRAP=<lan ip>:49737
+```
+
+Discovery and the hole punch then stay entirely inside the LAN. `status` reports which
+bootstrap a session is using — sessions on different bootstraps form separate DHTs and
+cannot see each other, so the value must match everywhere.
+
 ## Repo layout
 
 - [`test/security.js`](test/security.js) — path-traversal regression test (`npm run test:security`)
@@ -232,6 +255,8 @@ to your inbox, and start a new room if it might have leaked.
 - [`src/crypto.js`](src/crypto.js) — invite codes, argon2 stretching, MACs, secretbox
 - [`src/store.js`](src/store.js) — persistence: identity, room keys, inbox/outbox
 - [`src/scope.js`](src/scope.js) — per-project store scoping (shared by server and hooks)
+- [`scripts/bootstrap-node.js`](scripts/bootstrap-node.js) — DHT bootstrap node for a
+  private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
 
 ## License

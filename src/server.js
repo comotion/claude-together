@@ -8,8 +8,27 @@ import { Together, VERSION } from './transport.js'
 import { projectDir } from './scope.js'
 import { hash, randomBytes } from './crypto.js'
 
+// Discovery normally bootstraps off the public hyperdht nodes, and peers are then
+// introduced by their public addresses. Two machines behind one restrictive NAT can
+// reach those nodes and still fail to hole-punch each other, which looks like both
+// sides timing out. CLAUDE_TOGETHER_BOOTSTRAP repoints discovery at DHT nodes on your
+// own network — see scripts/bootstrap-node.js. Every session that should meet must
+// set the same value; sessions on different bootstraps cannot see each other.
+function bootstrapFromEnv () {
+  const raw = process.env.CLAUDE_TOGETHER_BOOTSTRAP
+  if (!raw || !raw.trim()) return undefined
+  return raw.split(',').map(entry => {
+    const node = entry.trim()
+    if (!/^[^\s:@]+:\d+$/.test(node)) {
+      throw new Error(`CLAUDE_TOGETHER_BOOTSTRAP: expected a comma-separated list of host:port, got "${node}"`)
+    }
+    return node
+  })
+}
+
+const bootstrap = bootstrapFromEnv()
 const store = new Store()
-const together = new Together({ store })
+const together = new Together({ store, bootstrap })
 
 const server = new McpServer({
   name: 'claude-together',
@@ -122,7 +141,10 @@ server.registerTool('status', {
   const scope = process.env.CLAUDE_TOGETHER_DIR
     ? `custom store (CLAUDE_TOGETHER_DIR=${process.env.CLAUDE_TOGETHER_DIR})`
     : projectDir()
-  return text(JSON.stringify({ scope, ...together.status() }, null, 2))
+  const discovery = bootstrap
+    ? `custom bootstrap (CLAUDE_TOGETHER_BOOTSTRAP=${bootstrap.join(',')}) — peers must use the same`
+    : 'public hyperdht bootstrap nodes'
+  return text(JSON.stringify({ scope, discovery, ...together.status() }, null, 2))
 })
 
 server.registerTool('set_display_name', {
