@@ -38,12 +38,23 @@ Requires [Node.js](https://nodejs.org) ≥ 18 and [Claude Code](https://claude.c
 git clone https://github.com/wybe-labs/claude-together
 cd claude-together
 npm install
-npm run register
+
+cd /path/to/your/project        # the project you want to be reachable in
+npm --prefix /path/to/claude-together run register
 ```
 
-`npm run register` runs `claude mcp add` for you (user scope, so it works in every
-project). If the `claude` CLI isn't on your PATH it prints the exact command to run
-manually. Then restart your Claude Code session — that's it.
+Registration is **per project**, not machine-wide: hooks go in that project's
+`.claude/settings.local.json`, the slash commands in its `.claude/commands`, and the
+MCP server is added at `--scope local`. A session in a project you never registered
+has no claude-together tools and no delivery hooks, so it cannot be pulled into a
+room — being reachable is something you turn on where you want it. Run it again in
+each project you want, and restart your Claude Code session.
+
+If the `claude` CLI isn't on your PATH it prints the exact command to run manually.
+
+> Upgrading from ≤0.3? Those versions installed hooks user-wide in
+> `~/.claude/settings.json`, where they fired in every project. `npm run register`
+> removes those entries (leaving any other hooks alone) and tells you it did.
 
 ## Usage
 
@@ -258,6 +269,7 @@ cannot see each other, so the value must match everywhere.
 - [`scripts/bootstrap-node.js`](scripts/bootstrap-node.js) — DHT bootstrap node for a
   private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
+- [`test/register.js`](test/register.js) — per-project hook installation
 
 ## License
 
