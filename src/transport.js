@@ -1012,6 +1012,11 @@ export class Together extends EventEmitter {
           // First contact is its own state, not silent success: the fingerprint is
           // shown once so a human can check it, and pinned from then on.
           auth = pinned ? (pinned === pkHex ? 'verified' : 'key-changed') : 'verified-new'
+          // A message signed with our own identity key is another of this person's
+          // sessions — several projects on one machine share the key. Calling that
+          // first contact invites the user to go and verify a fingerprint against
+          // themselves, and teaches them to wave the check through.
+          if (pkHex === b4a.toString(this.keys.publicKey, 'hex')) auth = 'self'
         } else if (pinned) {
           auth = 'unsigned-expected-signed'
         }
@@ -1033,7 +1038,7 @@ export class Together extends EventEmitter {
           ...(typeof msg.harness === 'string' && HARNESS_RE.test(msg.harness) ? { harness: msg.harness } : {}),
           // The signature travels with the message so members catching up later
           // through a friend's log can verify the original sender themselves.
-          ...(auth === 'verified' || auth === 'verified-new' || auth === 'key-changed' ? { pk: pkHex, sig: sigHex } : {})
+          ...(auth !== 'unsigned-expected-signed' && pkHex ? { pk: pkHex, sig: sigHex } : {})
         }
         if (to) relay.to = to
         // Local delivery: an addressed message lands actively only for the named
@@ -1053,7 +1058,7 @@ export class Together extends EventEmitter {
           host: relay.host,
           label: relay.label,
           harness: relay.harness,
-          ...(auth === 'verified-new' ? { pk: pkHex } : {})
+          ...((auth === 'verified-new' || auth === 'self') && !pinned ? { pk: pkHex } : {})
         })
         this.store.pushInbound(inbound)
         this.store.appendLog(relay)

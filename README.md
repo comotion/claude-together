@@ -159,7 +159,9 @@ With separate stores every session receives every message.
 
 Your identity key is machine-global, so all your sessions sign with the same key and
 peers see one member with several connected peers, told apart by project label and
-session id. Set `CLAUDE_TOGETHER_LABEL` per project to make them readable.
+session id. Set `CLAUDE_TOGETHER_LABEL` per project to make them readable. A message
+from one of your own sessions is labelled as such rather than as a new sender, so
+nothing invites you to go and check a fingerprint against yourself.
 
 A room name that means two different rooms on this machine is refused rather than
 guessed at, since picking the wrong one would join a conversation you did not mean.

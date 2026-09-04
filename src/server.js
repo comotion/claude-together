@@ -49,6 +49,9 @@ const AUTH_WARNINGS = {
 // First contact says so once, with the fingerprint, so it can actually be checked;
 // afterwards the key is pinned and silence means it still matches.
 function authNote (m) {
+  if (m.auth === 'self') {
+    return ' (another of your own sessions — same identity key)'
+  }
   if (m.auth === 'verified-new' && m.pk) {
     return ` (first message from this sender — identity key ${fingerprint(m.pk)}, now pinned;` +
       ' if it matters, have your user check that fingerprint with them out of band)'

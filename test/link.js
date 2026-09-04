@@ -50,9 +50,23 @@ const friend = new Together({ store: projectStore('friend-cccccccccccc'), bootst
 first.store.setName('kacper')
 second.store.setName('kacper')
 friend.store.setName('ronny')
+
+// Two projects on one machine share the machine-global identity file. These stores are
+// given explicit directories, which makes each hold its own identity, so copy the
+// keypair across to reproduce what really happens. Without this the two projects sign
+// as different people and the self-recognition below cannot be exercised at all.
+const mine = first.store.signingKeyPair()
+const secondConfig = path.join(projects, 'other-bbbbbbbbbbbb', 'config.json')
+const secondJson = JSON.parse(fs.readFileSync(secondConfig, 'utf8'))
+secondJson.signPk = mine.publicKey.toString('base64')
+secondJson.signSk = mine.secretKey.toString('base64')
+fs.writeFileSync(secondConfig, JSON.stringify(secondJson, null, 2))
+
 await first.start()
 await second.start()
 await friend.start()
+assert.ok(first.keys.publicKey.equals(second.keys.publicKey), 'both projects must share an identity')
+assert.ok(!first.keys.publicKey.equals(friend.keys.publicKey), 'the friend must be a different identity')
 
 console.log('1. One project pairs into a room the normal way…')
 const inv = first.createInvite('shared-room')
@@ -90,14 +104,31 @@ await Promise.all([atFirst, atSecond])
 assert.equal(first.store.drainInbound().filter(m => m.text === 'hello both').length, 1)
 assert.equal(second.store.drainInbound().filter(m => m.text === 'hello both').length, 1)
 
-console.log('5. An unknown room name is refused, and says what it did find…')
+console.log('5. A message from your own other session is labelled as such…')
+// Both projects sign with the machine identity, so this must not be reported as first
+// contact with a stranger — that invites verifying a fingerprint against yourself.
+const ownAtFirst = waitFor(first, 'message', m => m.text === 'from my other project')
+second.sendMessage('shared-room', 'from my other project')
+const own = await ownAtFirst
+assert.equal(own.auth, 'self', 'our own identity key must not read as a new sender')
+assert.match(own.pk, /^[0-9a-f]{64}$/, 'the signature still travels with it')
+// The name is pinned regardless, which is what makes someone else claiming it show up.
+assert.ok(first.store.membersFor(roomId).kacper?.pk, 'the name must still get pinned')
+
+console.log('6. The friend still sees it as an ordinary signed message…')
+const atFriend = waitFor(friend, 'message', m => m.text === 'from my other project')
+const friendCopy = await atFriend
+assert.notEqual(friendCopy.auth, 'self', "someone else's key is not their own")
+assert.ok(['verified', 'verified-new'].includes(friendCopy.auth), `unexpected auth ${friendCopy.auth}`)
+
+console.log('7. An unknown room name is refused, and says what it did find…')
 assert.throws(() => second.linkRoom('no-such-room'),
   /no project on this machine holds a room called "no-such-room".*shared-room/s)
 
-console.log('6. An empty name is refused rather than matching something…')
+console.log('8. An empty name is refused rather than matching something…')
 assert.throws(() => second.linkRoom('   '), /which room/)
 
-console.log('7. Two different rooms sharing a name are refused, not guessed…')
+console.log('9. Two different rooms sharing a name are refused, not guessed…')
 const decoy = projectStore('decoy-dddddddddddd')
 const decoyNode = new Together({ store: decoy, bootstrap })
 await decoyNode.start()
