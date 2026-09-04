@@ -7,9 +7,12 @@ server, nothing to host, nothing to sign up for.
 
 ```
 you: "create an invite for room bug-hunt"
-      → invite code: X7KQ-2MPF-3HV9  (text it to your friend)
+      → rendezvous: X7KQ-2MPF-3HV9  (text it to your friend — it is not a secret)
 
 friend: "join room X7KQ-2MPF-3HV9"
+      → both of you see: 482 913   (say it out loud to each other)
+
+both: "confirm 482 913"
       → connected, directly, encrypted
 
 you: "tell bug-hunt: the leak is in token refresh, check session.ts"
@@ -20,9 +23,10 @@ Built on [Hyperswarm](https://github.com/holepunchto/hyperswarm): peers find eac
 through a public BitTorrent-style DHT, hole-punch a direct UDP connection, and talk over
 Noise-encrypted sockets. Exposed to Claude as an [MCP](https://modelcontextprotocol.io) server.
 
-**Current release: v0.3.1 (LTS)** — per-project room membership, signed messages
-(TOFU), session identifiers, and a version handshake. LTS: 0.3.x stays
-wire-compatible; peers on mismatched versions detect and report it in-session.
+**Current release: v0.4.0** — SAS pairing (no invite secret), per-project
+registration, receiver-side interrupt opt-in, and private-network bootstrap.
+**Wire-incompatible with 0.3.x pairing:** both sides must be on 0.4 to pair.
+Peers on mismatched versions detect and report it in-session.
 
 ### ▶ 30-second explainer
 
@@ -63,8 +67,9 @@ natural language — both end up calling the same MCP tools.
 
 | Slash command | Shorthand for |
 |---|---|
-| `/together-invite bug-hunt` | create a room + invite code |
-| `/together-join X7KQ-2MPF-3HV9` | redeem a friend's code |
+| `/together-invite bug-hunt` | create a room + open a pairing rendezvous |
+| `/together-join X7KQ-2MPF-3HV9` | answer a friend's rendezvous, get the number to compare |
+| `/together-confirm 482 913` | confirm the number you both read aloud — completes the pairing |
 | `/together-send bug-hunt found it, check session.ts` | send a message (lands when their turn ends) |
 | `/together-send bug-hunt to alice: here's that stack trace` | address specific people — only they get active delivery |
 | `/together-interrupt bug-hunt stop, merging a fix now` | barge into their running session (if that room opted in) |
@@ -76,8 +81,8 @@ Or just talk to Claude in any session:
 
 | You say | What happens |
 |---|---|
-| "create an invite for room `name`" | Creates the room, prints a short single-use code (5 min TTL). Keep your session open until your friend joins. |
-| "join room `X7KQ-2MPF-3HV9`" | Redeems a code from a friend; pairs in a few seconds. Everyone already in the room automatically gets a "`name` joined the room (`hostname` · `session label` · `harness`)" notice — even members who are offline see it when they reconnect. The label defaults to your project folder name; set `CLAUDE_TOGETHER_LABEL` to override it. |
+| "create an invite for room `name`" | Creates the room and opens a pairing rendezvous, printing a short id. The id is not a secret and does not expire. Keep your session open until the pairing completes. |
+| "join room `X7KQ-2MPF-3HV9`" | Answers a friend's rendezvous and returns a six-digit number to compare out of band; after you both confirm it, you are in. Everyone already in the room automatically gets a "`name` joined the room (`hostname` · `session label` · `harness`)" notice — even members who are offline see it when they reconnect. The label defaults to your project folder name; set `CLAUDE_TOGETHER_LABEL` to override it. |
 | "send to `name`: …" | Delivers instantly if they're online, otherwise queues on disk and delivers when you're both online. |
 | "check my messages" | Fetches everything unread, across all rooms. |
 | "multiplayer status" | Rooms, connected peers, known members with last-seen times, queued/unread counts. |
@@ -161,20 +166,37 @@ listing them — mint fresh invites in the projects that need them, or set
 `CLAUDE_TOGETHER_DIR=~/.claude-together` to keep using the old shared store. Your
 display name (and new signing identity) carry over automatically.
 
-## Why the invite codes can be short
+## Why there is no invite secret
 
-The code is not the encryption key — it's a single-use pairing secret
-(the [magic-wormhole](https://github.com/magic-wormhole/magic-wormhole) trick):
+Pairing does not rely on the id staying private, so there is nothing to leak, nothing
+to expire, and no window to miss. The id names a meeting point; **two humans reading
+six digits to each other** is what authenticates the exchange:
 
-1. Both sides stretch the code with **argon2id** (64 MB memory-hard) into a pairing key
-   and meet at a DHT topic derived from it.
-2. They prove knowledge of the code to each other with nonce-bound MACs — a stranger
-   who finds the meeting point can't complete the handshake.
-3. Over that authenticated, encrypted link the inviter hands over the room's real
-   random **256-bit key**. The code is then retired forever.
+1. Both sides meet at a DHT topic derived from the (public) rendezvous id and open a
+   Noise-encrypted socket.
+2. Each sends its long-lived **ed25519 identity key** together with a fresh **X25519**
+   key, signed — so an ephemeral key cannot be offered under someone else's identity.
+3. Both derive the same **six-digit number** from the transcript (both identity keys,
+   both ephemeral keys, the id), ordered so each side computes it identically.
+4. The humans compare that number out of band. On confirmation, the inviter encrypts
+   the room's random **256-bit key** to the X25519 secret they agreed.
 
-60 bits of entropy + argon2 + single-use + 5-minute expiry ≫ anything brute-forceable
-in the window.
+A man-in-the-middle has to substitute its own key toward at least one side to read
+anything — which changes the number that side sees, so the comparison fails. Relaying
+the real keys untouched keeps the numbers matching but leaves the attacker without the
+agreed secret, so the room key stays unreadable. Its only escape is guessing which
+six digits to show, at 1-in-a-million, against two people about to say them aloud.
+
+**This shifts the burden onto the comparison.** Rubber-stamping the number without
+actually checking it removes the entire protection — the number must be exchanged on a
+channel an attacker on the rendezvous does not control (a call, in person), never in the
+same chat you pasted the id into. `confirm_pairing` exists so that step is a deliberate
+human act; Claude is told never to perform it on your behalf.
+
+Multiple peers may answer the same public rendezvous — that is expected, not an attack
+in itself. Each gets its own number, `status` lists them side by side with the name,
+host and key fingerprint, and confirming a number is what selects which one you paired
+with.
 
 ## Security model
 
@@ -201,9 +223,7 @@ trusted.
 ### Limitations — know these before trusting it with anything sensitive
 
 - **A room key is permanent and unrevocable.** Anyone who ever holds it — an invited
-  member, or whoever redeems a leaked code first within its 5-minute window (an
-  invite is spent the moment its key is handed over, so only one redeemer wins) —
-  keeps read/write access forever. `leave_room` only deletes *your own* copy; it can't evict anyone else.
+  member, or anyone a member confirms a pairing with — keeps read/write access forever. `leave_room` only deletes *your own* copy; it can't evict anyone else.
   **You cannot kick a member.** The only way to exclude someone is for everyone else to
   start a fresh room. There is no forward secrecy: a leaked key exposes past logged
   history and all future messages.
@@ -273,12 +293,13 @@ cannot see each other, so the value must match everywhere.
 - [`src/server.js`](src/server.js) — MCP server and tool definitions
 - [`src/transport.js`](src/transport.js) — Hyperswarm swarm, pairing handshake, room
   auth, at-least-once message protocol
-- [`src/crypto.js`](src/crypto.js) — invite codes, argon2 stretching, MACs, secretbox
+- [`src/crypto.js`](src/crypto.js) — rendezvous ids, SAS derivation, X25519 agreement, signatures, secretbox
 - [`src/store.js`](src/store.js) — persistence: identity, room keys, inbox/outbox
 - [`src/scope.js`](src/scope.js) — per-project store scoping (shared by server and hooks)
 - [`scripts/bootstrap-node.js`](scripts/bootstrap-node.js) — DHT bootstrap node for a
   private network: `npm run bootstrap-node -- --host <lan ip>`
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
+- [`test/pairing.js`](test/pairing.js) — SAS pairing and identity pinning
 - [`test/interrupts.js`](test/interrupts.js) — receiver-side interrupt opt-in
 - [`test/register.js`](test/register.js) — per-project hook installation
 

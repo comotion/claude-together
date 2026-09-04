@@ -1,6 +1,6 @@
 {
   "name": "claude-together",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Serverless P2P session multiplayer for Claude Code — an MCP server over Hyperswarm",
   "type": "module",
   "main": "src/server.js",
@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "register": "node scripts/register.js",
     "bootstrap-node": "node scripts/bootstrap-node.js",
-    "test": "node test/scope.js && node test/register.js && node test/smoke.js && node test/interrupts.js",
+    "test": "node test/scope.js && node test/register.js && node test/smoke.js && node test/interrupts.js && node test/pairing.js",
     "test:security": "node test/security.js",
     "test:live": "node test/live.js"
   },

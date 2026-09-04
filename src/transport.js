@@ -8,7 +8,9 @@ import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import {
   generateInviteCode, deriveCodeKey, derive, topicFor,
-  randomBytes, mac, seal, open, timingSafeEqual, hash, sign, verify
+  randomBytes, mac, seal, open, timingSafeEqual, hash, sign, verify,
+  generateRendezvousId, rendezvousTopic, ephemeralKeyPair, agree, pairingTranscript,
+  sasFrom, normalizeSas, normalizeCode, formatCode, helloSignable, confirmSignable, fingerprint
 } from './crypto.js'
 
 export const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -81,6 +83,14 @@ function harnessName () {
   return 'mcp'
 }
 
+// Wire fields arrive as untrusted strings: accept only an exact-length hex blob, so
+// a short/oversized/garbage value is rejected before it reaches a crypto primitive.
+function hexBytes (value, len) {
+  if (typeof value !== 'string' || value.length !== len * 2) return null
+  if (!/^[0-9a-f]+$/.test(value)) return null
+  return b4a.from(value, 'hex')
+}
+
 const SID_RE = /^[0-9a-f]{1,16}$/
 const PK_RE = /^[0-9a-f]{64}$/
 const SIG_RE = /^[0-9a-f]{128}$/
@@ -118,6 +128,12 @@ export class Together extends EventEmitter {
     this.discoveries = new Map()         // topicHex -> discovery session
     this.pendingInvites = new Map()      // pairing topicHex -> { roomId, codeKey, timer, topic }
     this.pendingJoins = new Map()        // pairing topicHex -> { codeKey, resolve, reject, timer, topic, retry }
+    // SAS pairing: rendezvous topicHex -> session. The rendezvous id is public and
+    // does not expire, so a session lives until it grants, is cancelled, or the
+    // process ends. Several peers can answer the same rendezvous at once — each gets
+    // its own entry in session.peers with its own SAS, and the human picks by reading
+    // the number back, which is what makes an impostor fail.
+    this.pendingPairs = new Map()
     this._versionNotified = new Set()    // peer+version pairs already surfaced this process
   }
 
@@ -164,6 +180,11 @@ export class Together extends EventEmitter {
       reject(new Error('shutting down'))
     }
     this.pendingJoins.clear()
+    for (const session of this.pendingPairs.values()) {
+      clearInterval(session.retry)
+      session.resolve?.()
+    }
+    this.pendingPairs.clear()
     await this.swarm?.destroy()
   }
 
@@ -264,6 +285,197 @@ export class Together extends EventEmitter {
     })
   }
 
+  // --- SAS pairing ---
+  //
+  // No shared secret. Both sides meet at a public rendezvous, exchange identity keys
+  // bound to fresh X25519 keys by a signature, and derive a six-digit number from the
+  // transcript. The humans read that number to each other; matching numbers mean no
+  // one is in the middle, because a relay must present its own key to at least one
+  // side and that changes the number it sees. The room key is then encrypted to the
+  // agreed secret, so a passive relay that forwards everything untouched still learns
+  // nothing. Nothing here expires: secrecy is not what is protecting the exchange.
+
+  _pairSessionFor (id) {
+    const want = normalizeCode(String(id || ''))
+    if (!want) return null
+    for (const session of this.pendingPairs.values()) {
+      if (normalizeCode(session.id) === want) return session
+    }
+    return null
+  }
+
+  _pairingView (session) {
+    return {
+      id: session.id,
+      role: session.role,
+      roomName: session.roomName || null,
+      peers: [...session.peers.values()].map(p => ({
+        name: p.name,
+        host: p.host,
+        label: p.label,
+        fingerprint: fingerprint(p.pk),
+        sas: p.sas,
+        confirmed: p.localConfirmed
+      }))
+    }
+  }
+
+  createPairing (roomName) {
+    let room = this.store.roomByName(roomName)
+    if (!room) {
+      this.createRoom(roomName)
+      room = this.store.roomByName(roomName)
+    }
+    const id = generateRendezvousId()
+    const topic = rendezvousTopic(id)
+    const hex = b4a.toString(topic, 'hex')
+    const session = {
+      id,
+      role: 'inviter',
+      roomId: room.id,
+      roomName: room.name,
+      eph: ephemeralKeyPair(),
+      nonce: randomBytes(24),
+      topic,
+      hex,
+      peers: new Map(),
+      granted: false
+    }
+    this.pendingPairs.set(hex, session)
+    this._joinTopic(topic)
+    for (const conn of this.conns) this._sendPairHello(conn, session)
+    return { id, roomName: room.name }
+  }
+
+  // Resolves as soon as a peer answers, or after firstLookMs with an empty peer list —
+  // the rendezvous stays open either way, and a peer arriving later is announced
+  // through the inbox. There is no failure deadline to miss.
+  joinRendezvous (id, { firstLookMs = 20_000 } = {}) {
+    const existing = this._pairSessionFor(id)
+    if (existing) return Promise.resolve(this._pairingView(existing))
+
+    const topic = rendezvousTopic(id)
+    const hex = b4a.toString(topic, 'hex')
+    const session = {
+      id: formatCode(id),
+      role: 'joiner',
+      eph: ephemeralKeyPair(),
+      nonce: randomBytes(24),
+      topic,
+      hex,
+      peers: new Map(),
+      granted: false,
+      resolve: null
+    }
+    this.pendingPairs.set(hex, session)
+    this._joinTopic(topic)
+    // The other side's announce may land after our first query, and hyperswarm's own
+    // refresh cadence is minutes. Keep looking for as long as the rendezvous is open.
+    session.retry = setInterval(() => {
+      this.discoveries.get(hex)?.refresh().catch(() => {})
+    }, 4_000)
+    if (session.retry.unref) session.retry.unref()
+    for (const conn of this.conns) this._sendPairHello(conn, session)
+
+    return new Promise(resolve => {
+      const finish = () => {
+        clearTimeout(timer)
+        session.resolve = null
+        resolve(this._pairingView(session))
+      }
+      const timer = setTimeout(finish, firstLookMs)
+      if (timer.unref) timer.unref()
+      session.resolve = finish
+    })
+  }
+
+  // The human has read the number back and it matched. Selecting the peer BY its SAS
+  // is what rejects an impostor: a wrong peer simply has a different number, so there
+  // is nothing to confirm it with.
+  confirmPairing (id, sas) {
+    const session = this._pairSessionFor(id)
+    if (!session) throw new Error(`no pairing in progress with id ${id}`)
+    const want = normalizeSas(sas)
+    const match = [...session.peers.entries()].find(([, p]) => normalizeSas(p.sas) === want)
+    if (!match) {
+      const seen = [...session.peers.values()].map(p => p.sas)
+      throw new Error(seen.length
+        ? `no peer at this rendezvous is showing ${sas}. Currently answering: ${seen.join(', ')}. ` +
+          'A number that does not match on both sides means someone else answered — do not confirm it.'
+        : `no peer has answered rendezvous ${session.id} yet.`)
+    }
+    const [conn, peer] = match
+    peer.localConfirmed = true
+    this._send(conn, {
+      t: 'pair-confirm',
+      id: session.id,
+      sig: b4a.toString(sign(confirmSignable(peer.transcript), this.keys.secretKey), 'hex')
+    })
+    this._maybeGrant(session, conn, peer)
+    return { name: peer.name, fingerprint: fingerprint(peer.pk), waiting: !session.granted }
+  }
+
+  cancelPairing (id) {
+    const session = this._pairSessionFor(id)
+    if (!session) return null
+    this._closePairing(session)
+    return { id: session.id }
+  }
+
+  _closePairing (session) {
+    clearInterval(session.retry)
+    this.pendingPairs.delete(session.hex)
+    this._leaveTopic(session.topic)
+  }
+
+  _sendPairHello (conn, session) {
+    const state = conn._ct
+    if (!state) return
+    state.pairHellos = state.pairHellos || new Set()
+    if (state.pairHellos.has(session.hex)) return
+    state.pairHellos.add(session.hex)
+    const pk = this.keys.publicKey
+    const epk = session.eph.publicKey
+    this._send(conn, {
+      t: 'pair-hello',
+      id: session.id,
+      pk: b4a.toString(pk, 'hex'),
+      epk: b4a.toString(epk, 'hex'),
+      nonce: b4a.toString(session.nonce, 'hex'),
+      name: this.store.getName(),
+      host: os.hostname().slice(0, 64),
+      label: sessionLabel(),
+      sid: this.sid,
+      harness: harnessName(),
+      v: VERSION,
+      sig: b4a.toString(sign(helloSignable(session.id, pk, epk, session.nonce), this.keys.secretKey), 'hex')
+    })
+  }
+
+  // Inviter side: hand over the room key once BOTH humans have confirmed the number.
+  _maybeGrant (session, conn, peer) {
+    if (session.role !== 'inviter' || session.granted) return
+    if (!peer.localConfirmed || !peer.peerConfirmed) return
+    const room = this.store.rooms().find(r => r.id === session.roomId)
+    if (!room) return
+    session.granted = true
+    const grant = JSON.stringify({
+      roomKey: b4a.toString(room.key, 'base64'),
+      roomName: room.name
+    })
+    this._send(conn, {
+      t: 'pair-grant',
+      id: session.id,
+      box: b4a.toString(seal(peer.secret, b4a.from(grant)), 'base64')
+    })
+    // Pin the key we just verified by hand. This is a stronger anchor than pinning
+    // whatever key happens to sign the first message: a human confirmed this one.
+    this.store.touchMember(room.id, peer.name, Date.now(), {
+      host: peer.host, label: peer.label, harness: peer.harness, pk: b4a.toString(peer.pk, 'hex')
+    })
+    this._closePairing(session)
+  }
+
   // --- connections & handshake ---
 
   _candidates () {
@@ -294,6 +506,11 @@ export class Together extends EventEmitter {
 
     // A peer that never proves any shared key gets dropped.
     state.authTimer = setTimeout(() => conn.destroy(), AUTH_TIMEOUT_MS)
+
+    // Rendezvous ids are public, so there is nothing to withhold until the peer
+    // proves something: announce our open rendezvous and let the SAS sort out who
+    // actually answered.
+    for (const session of this.pendingPairs.values()) this._sendPairHello(conn, session)
 
     conn.on('data', data => {
       state.buf += b4a.toString(data)
@@ -456,6 +673,123 @@ export class Together extends EventEmitter {
         })
         this._versionCheck(state, roomId)
         this.emit('peer-joined', { roomId, name: state.peerName })
+        break
+      }
+
+      case 'pair-hello': {
+        const session = this._pairSessionFor(msg.id)
+        if (!session || session.granted) return
+        if (session.peers.has(conn)) return
+        const pk = hexBytes(msg.pk, 32)
+        const epk = hexBytes(msg.epk, 32)
+        const nonce = hexBytes(msg.nonce, 24)
+        const sig = hexBytes(msg.sig, 64)
+        if (!pk || !epk || !nonce || !sig) return
+        // The signature is what binds this ephemeral key to that identity key. Without
+        // it a relay could offer its own ephemeral key under someone else's name and
+        // still show a matching number.
+        if (!verify(helloSignable(session.id, pk, epk, nonce), sig, pk)) return
+        if (b4a.equals(pk, this.keys.publicKey)) return
+        const secret = agree(session.eph.secretKey, epk)
+        if (!secret) return
+        const transcript = pairingTranscript(
+          session.id,
+          { pk: this.keys.publicKey, epk: session.eph.publicKey },
+          { pk, epk }
+        )
+        const peer = {
+          pk,
+          epk,
+          secret,
+          transcript,
+          sas: sasFrom(transcript),
+          name: String(msg.name || 'unknown').slice(0, 64),
+          host: msg.host ? String(msg.host).slice(0, 64) : undefined,
+          label: msg.label ? String(msg.label).slice(0, 64) : undefined,
+          harness: HARNESS_RE.test(String(msg.harness || '')) ? msg.harness : undefined,
+          localConfirmed: false,
+          peerConfirmed: false
+        }
+        session.peers.set(conn, peer)
+        clearTimeout(state.authTimer)
+        this._sendPairHello(conn, session)
+        if (session.resolve) session.resolve()
+        this.emit('pair-peer', { id: session.id, name: peer.name, sas: peer.sas })
+        // Surface it in-session too: the rendezvous has no deadline, so the answer
+        // can arrive long after the tool call that opened it returned.
+        this.store.pushInbound({
+          id: b4a.toString(randomBytes(12), 'hex'),
+          roomName: session.roomName || `pairing ${session.id}`,
+          from: `claude-together pairing ${session.id}`,
+          text: `${peer.name} (${peer.host || 'unknown host'}, key ${fingerprint(peer.pk)}) answered. ` +
+            `Compare this number with them out of band — say it out loud, do not paste it into the same ` +
+            `channel you shared the rendezvous id in: ${peer.sas}. ` +
+            'If they read back the same number, confirm the pairing with that number. If it differs, ' +
+            'someone else is answering — do not confirm, and tell your user.',
+          ts: Date.now(),
+          priority: 'normal',
+          kind: 'presence'
+        })
+        break
+      }
+
+      case 'pair-confirm': {
+        const session = this._pairSessionFor(msg.id)
+        if (!session) return
+        const peer = session.peers.get(conn)
+        if (!peer) return
+        const sig = hexBytes(msg.sig, 64)
+        if (!sig) return
+        if (!verify(confirmSignable(peer.transcript), sig, peer.pk)) return
+        peer.peerConfirmed = true
+        this._maybeGrant(session, conn, peer)
+        break
+      }
+
+      case 'pair-grant': {
+        // Joiner side: the inviter confirmed the same number and is handing over the
+        // room key, encrypted to the key we agreed — a relay that forwarded every byte
+        // untouched still cannot read it.
+        const session = this._pairSessionFor(msg.id)
+        if (!session || session.role !== 'joiner' || session.granted) return
+        const peer = session.peers.get(conn)
+        if (!peer || !peer.localConfirmed) return
+        const plain = open(peer.secret, b4a.from(String(msg.box || ''), 'base64'))
+        if (!plain) return
+        const grant = JSON.parse(b4a.toString(plain))
+        const roomKey = b4a.from(grant.roomKey, 'base64')
+        const roomId = roomIdFor(roomKey)
+        const alreadyMember = this.store.rooms().some(r => r.id === roomId)
+        session.granted = true
+        this.store.addRoom(roomId, grant.roomName, roomKey)
+        this.store.touchMember(roomId, peer.name, Date.now(), {
+          host: peer.host, label: peer.label, harness: peer.harness, pk: b4a.toString(peer.pk, 'hex')
+        })
+        this._joinTopic(topicFor(roomKey, 'room'))
+        this._send(conn, { t: 'pair-grant-ack', id: session.id })
+        this._closePairing(session)
+        this._reproveAll()
+        if (!alreadyMember) {
+          this._broadcast(roomId, { text: 'joined the room', priority: 'normal', kind: 'presence' })
+        }
+        this.emit('paired', { roomId, roomName: grant.roomName, name: peer.name })
+        this.store.pushInbound({
+          id: b4a.toString(randomBytes(12), 'hex'),
+          roomName: grant.roomName,
+          from: `claude-together pairing ${session.id}`,
+          text: `paired with ${peer.name} — you are now in room "${grant.roomName}". ` +
+            `Their identity key ${fingerprint(peer.pk)} is pinned; you will be warned if it ever changes.`,
+          ts: Date.now(),
+          priority: 'normal',
+          kind: 'presence'
+        })
+        break
+      }
+
+      case 'pair-grant-ack': {
+        const session = this._pairSessionFor(msg.id)
+        if (!session || session.role !== 'inviter') return
+        this._closePairing(session)
         break
       }
 
@@ -726,6 +1060,7 @@ export class Together extends EventEmitter {
       session: { host: os.hostname().slice(0, 64), label: sessionLabel(), sid: this.sid, harness: harnessName() },
       rooms,
       pendingInvites: this.pendingInvites.size,
+      pendingPairings: [...this.pendingPairs.values()].map(s => this._pairingView(s)),
       unreadMessages: this.store.unreadCount()
     }
   }
