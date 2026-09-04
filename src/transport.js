@@ -172,6 +172,7 @@ export class Together extends EventEmitter {
         if (this.roomConns.get(room.id)?.size) continue
         this.discoveries.get(hex)?.refresh().catch(() => {})
       }
+      this.retryOutbound()
     }, 30_000)
     if (this._maintenance.unref) this._maintenance.unref()
   }
@@ -1031,6 +1032,22 @@ export class Together extends EventEmitter {
   // offline catch-up through friends, immediate fan-out to live peers.
   // Every message carries the sender's host, session label, and session id so
   // receivers can tell which machine/project/session it came from.
+  // At-least-once has to mean retrying, not offering once and hoping. The outbox is
+  // replayed when a peer proves a room, and a message handed over in the window before
+  // that peer has bound the room to the connection is dropped on arrival with no ack —
+  // stranded until another proof happens to come along, which it may never do.
+  //
+  // Re-offering is safe and idempotent: the receiver acks before it dedups, so a copy
+  // it already holds still clears our outbox.
+  retryOutbound () {
+    for (const [roomId, conns] of this.roomConns) {
+      if (conns.size === 0) continue
+      for (const m of this.store.outboundFor(roomId)) {
+        for (const conn of conns) this._send(conn, { t: 'msg', ...m })
+      }
+    }
+  }
+
   _broadcast (roomId, { text, priority, kind, to }) {
     const msgId = b4a.toString(hash(randomBytes(16)).subarray(0, 12), 'hex')
     const msg = {

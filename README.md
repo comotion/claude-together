@@ -344,6 +344,7 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
 - [`test/smoke.js`](test/smoke.js) — end-to-end test on a local DHT testnet: `npm test`
 - [`test/pairing.js`](test/pairing.js) — SAS pairing and identity pinning
 - [`test/interrupts.js`](test/interrupts.js) — receiver-side interrupt opt-in
+- [`test/outbox.js`](test/outbox.js) — at-least-once retry of queued messages
 - [`test/register.js`](test/register.js) — per-project hook installation
 
 ## License
