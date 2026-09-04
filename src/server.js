@@ -140,6 +140,30 @@ server.registerTool('cancel_pairing', {
     : `No open pairing rendezvous with id ${code}.`)
 })
 
+server.registerTool('create_legacy_invite', {
+  title: 'Create a pre-0.4 secret invite code',
+  description: 'Create a single-use secret invite code using the pre-0.4 pairing scheme. Use this ONLY to pair with a peer still running 0.3.x, which cannot answer a rendezvous. The code IS the secret here: whoever redeems it first within its lifetime gets the room key, with no number to compare and nothing to catch an interceptor, so send it only over a channel you trust and mint a fresh one if it may have leaked. Prefer create_invite whenever both sides run 0.4.',
+  inputSchema: { room_name: z.string().describe('Name for the room, e.g. "auth-refactor"') }
+}, async ({ room_name }) => {
+  const inv = together.createInvite(room_name)
+  return text(
+    `Legacy invite code for room "${inv.roomName}": ${inv.code}\n` +
+    `Single use, valid for ${inv.expiresInMinutes} minutes. Tell your friend to say: ` +
+    `"join with legacy code ${inv.code}".\n` +
+    'This code is a secret — anyone who redeems it first is in the room, and there is no ' +
+    'number to compare afterwards. Keep this session open until they join.'
+  )
+})
+
+server.registerTool('join_with_legacy_code', {
+  title: 'Redeem a pre-0.4 secret invite code',
+  description: 'Redeem a secret invite code from a peer running the pre-0.4 pairing scheme. Waits up to 90 seconds and requires the inviter\'s session to be open. Unlike answering a rendezvous there is no number to compare, so this trusts whoever is on the other end of the code — tell your user that if the code travelled over a channel they do not control, they cannot tell from here whether they paired with their friend.',
+  inputSchema: { code: z.string().describe('The legacy invite code, e.g. X7KQ-2MPF-3HV9 (dashes/case optional)') }
+}, async ({ code }) => {
+  const res = await together.joinWithCode(code)
+  return text(`Joined room "${res.roomName}" with a legacy code. The other members were sent an automatic "joined the room" notice. Note that nothing here verified who you paired with beyond possession of the code.`)
+})
+
 server.registerTool('send_message', {
   title: 'Send a message to a room',
   description: 'Send a plain-text message to a room. Every message goes into the shared room chat log for all members; priority controls how it lands in their Claude sessions: "normal" (default) is delivered when their Claude finishes its current turn or they next prompt, "passive" just sits in their inbox until they check it, and "interrupt" asks to be injected mid-turn at their next tool boundary. Interrupt is a request, not a guarantee: each receiving session decides per room with set_room_interrupts, and it is OFF by default, so an interrupt into a room that has not opted in simply lands at turn end instead. Do not re-send or escalate when that happens. To address specific people, pass their display names in "to": only the named recipients get the active priority; everyone else in the room receives the message passively (inbox/chat log only, no interruption). Omit "to" to deliver at the given priority to the whole room. If no peer is online, the message queues locally and delivers on reconnect.',
