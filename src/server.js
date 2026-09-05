@@ -4,7 +4,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import b4a from 'b4a'
 import { Store } from './store.js'
-import { Together, VERSION } from './transport.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { Together, VERSION, PKG_ROOT, parseBootstrap } from './transport.js'
 import { projectDir } from './scope.js'
 import { hooksStatus } from './hooks.js'
 import { hash, randomBytes, fingerprint } from './crypto.js'
@@ -12,24 +16,46 @@ import { hash, randomBytes, fingerprint } from './crypto.js'
 // Discovery normally bootstraps off the public hyperdht nodes, and peers are then
 // introduced by their public addresses. Two machines behind one restrictive NAT can
 // reach those nodes and still fail to hole-punch each other, which looks like both
-// sides timing out. CLAUDE_TOGETHER_BOOTSTRAP repoints discovery at DHT nodes on your
-// own network — see scripts/bootstrap-node.js. Every session that should meet must
-// set the same value; sessions on different bootstraps cannot see each other.
-function bootstrapFromEnv () {
-  const raw = process.env.CLAUDE_TOGETHER_BOOTSTRAP
-  if (!raw || !raw.trim()) return undefined
-  return raw.split(',').map(entry => {
-    const node = entry.trim()
-    if (!/^[^\s:@]+:\d+$/.test(node)) {
-      throw new Error(`CLAUDE_TOGETHER_BOOTSTRAP: expected a comma-separated list of host:port, got "${node}"`)
-    }
-    return node
-  })
+// sides timing out. Repointing discovery at DHT nodes on your own network fixes that —
+// see scripts/bootstrap-node.js. Every session that should meet must use the same
+// value; sessions on different bootstraps cannot see each other.
+//
+// The environment wins over the stored setting, so a process launched with an explicit
+// one is never quietly overridden. Without it the stored setting applies, which is what
+// lets it be changed from a tool instead of by restarting Claude Code.
+const store = new Store()
+const envBootstrap = parseBootstrap(process.env.CLAUDE_TOGETHER_BOOTSTRAP)
+const bootstrapPinnedByEnv = envBootstrap !== undefined
+const together = new Together({ store, bootstrap: envBootstrap ?? (store.getBootstrap() || undefined) })
+
+const CLUSTER_STATE = path.join(os.homedir(), '.claude-together', 'local-bootstrap.json')
+
+function readCluster () {
+  try {
+    return JSON.parse(fs.readFileSync(CLUSTER_STATE, 'utf8'))
+  } catch {
+    return null
+  }
 }
 
-const bootstrap = bootstrapFromEnv()
-const store = new Store()
-const together = new Together({ store, bootstrap })
+function clusterAlive (state) {
+  if (!state?.pid) return false
+  try {
+    process.kill(state.pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function describeBootstrap () {
+  const nodes = together.bootstrap
+  if (!nodes) return 'public hyperdht bootstrap nodes'
+  const source = bootstrapPinnedByEnv ? 'CLAUDE_TOGETHER_BOOTSTRAP' : 'stored setting'
+  const cluster = readCluster()
+  const local = clusterAlive(cluster) ? `, local cluster running (pid ${cluster.pid})` : ''
+  return `custom bootstrap (${nodes.join(',')}, from ${source}${local}) — peers must use the same`
+}
 
 const server = new McpServer({
   name: 'claude-together',
@@ -144,6 +170,75 @@ server.registerTool('cancel_pairing', {
     : `No open pairing rendezvous with id ${code}.`)
 })
 
+server.registerTool('set_bootstrap', {
+  title: 'Point discovery at a different DHT',
+  description: 'Change where peer discovery bootstraps, and apply it immediately — no Claude Code restart. Pass nodes as host:port to use a private DHT (see start_local_bootstrap), or omit them to go back to the public nodes. The setting is remembered for this machine, so later sessions start there too. Everyone who should meet must use the SAME value: sessions on different bootstraps form separate DHTs and see each other as simply absent, with no error. Live connections drop and re-establish, since they belong to the DHT being left. If CLAUDE_TOGETHER_BOOTSTRAP is set for this process it keeps winning until that process ends — the stored value is still saved for later sessions.',
+  inputSchema: {
+    nodes: z.array(z.string()).optional()
+      .describe('Bootstrap nodes as host:port, e.g. ["192.168.1.10:49737"]. Omit or pass an empty list to use the public DHT. Must be an address peers can reach, never a hostname that resolves to loopback.')
+  }
+}, async ({ nodes }) => {
+  const res = await together.reconfigureBootstrap(nodes && nodes.length ? nodes : null)
+  const note = bootstrapPinnedByEnv
+    ? ' NOTE: CLAUDE_TOGETHER_BOOTSTRAP is set for this process, so it keeps overriding this until Claude Code restarts.'
+    : ''
+  return text(res.bootstrap
+    ? `Discovery now bootstraps from ${res.bootstrap.join(', ')} and this is remembered for the machine. Peers must use the same value.${note}`
+    : `Discovery is back on the public hyperdht nodes, and that is remembered for the machine.${note}`)
+})
+
+server.registerTool('start_local_bootstrap', {
+  title: 'Run a private DHT cluster on this machine',
+  description: 'Start a DHT cluster on this machine and point discovery at it, without restarting Claude Code. For when peers are on a network where the public DHT can introduce them but they cannot then connect — the classic case is two machines behind one corporate NAT. The host must be an address the OTHER peers can reach: a LAN address, not a hostname and not loopback, or they will be handed an address that leads nowhere. Only useful when every peer can reach that address, so it does nothing for people on separate networks. The cluster keeps running after this session ends; stop_local_bootstrap stops it.',
+  inputSchema: {
+    host: z.string().describe('Address other peers reach this machine on, e.g. "192.168.1.10"'),
+    port: z.number().int().optional().describe('Port for the bootstrap node (default 49737)'),
+    nodes: z.number().int().optional().describe('Extra member nodes (default 3). A lone bootstrapper cannot introduce two peers to each other.')
+  }
+}, async ({ host, port, nodes }) => {
+  const existing = readCluster()
+  if (clusterAlive(existing)) {
+    return text(`A local cluster is already running on ${existing.host}:${existing.port} (pid ${existing.pid}). Stop it first to change it.`)
+  }
+  const bootPort = port || 49737
+  const script = path.join(PKG_ROOT, 'scripts', 'bootstrap-node.js')
+  const child = spawn(process.execPath, [
+    script, '--host', host, '--port', String(bootPort), '--nodes', String(nodes || 3)
+  ], { detached: true, stdio: 'ignore' })
+  child.unref()
+  fs.mkdirSync(path.dirname(CLUSTER_STATE), { recursive: true })
+  fs.writeFileSync(CLUSTER_STATE, JSON.stringify(
+    { pid: child.pid, host, port: bootPort, nodes: nodes || 3, startedAt: new Date().toISOString() }, null, 2))
+  // Give it a moment to bind before pointing discovery at it, so the first lookup has
+  // something to talk to rather than failing and waiting for a retry.
+  await new Promise(resolve => setTimeout(resolve, 2000))
+  const res = await together.reconfigureBootstrap([`${host}:${bootPort}`])
+  return text(
+    `Local DHT cluster running on ${host}:${bootPort} (pid ${child.pid}), and discovery now uses it.\n` +
+    `Everyone who should meet you needs CLAUDE_TOGETHER_BOOTSTRAP=${host}:${bootPort}, or the same set via set_bootstrap. ` +
+    'It keeps running after this session ends, but not across a reboot unless you install it as a service.' +
+    (res.bootstrap ? '' : ' WARNING: discovery did not take the new value.')
+  )
+})
+
+server.registerTool('stop_local_bootstrap', {
+  title: 'Stop the private DHT cluster',
+  description: 'Stop the DHT cluster started by start_local_bootstrap. Discovery is NOT moved back to the public nodes automatically — that would silently change who this session can reach. Anyone still pointed at the stopped cluster is left on a DHT with nothing in it, so use set_bootstrap afterwards to move everyone back deliberately.',
+  inputSchema: {}
+}, async () => {
+  const state = readCluster()
+  if (!clusterAlive(state)) {
+    return text('No local bootstrap cluster is running.')
+  }
+  process.kill(state.pid)
+  fs.rmSync(CLUSTER_STATE, { force: true })
+  return text(
+    `Stopped the local cluster on ${state.host}:${state.port} (pid ${state.pid}). ` +
+    'Discovery is still pointed at it, so nothing will be found until you call set_bootstrap ' +
+    'with a different value or with no nodes to return to the public DHT.'
+  )
+})
+
 server.registerTool('link_room', {
   title: 'Link a room you already hold in another project',
   description: 'Join a room that another project on THIS machine already belongs to, by copying its key locally. No rendezvous, no number to compare, no network: the key is already on this machine, so nothing new is granted and there is nothing to verify. Use this to add a second working directory to a room you are already in — pairing is for reaching another person, not for moving your own key between your own directories. Each project keeps its own inbox, so both sessions receive every message independently instead of competing to read it. The room\'s other members are told that another of your sessions has joined.',
@@ -242,9 +337,7 @@ server.registerTool('status', {
   const scope = process.env.CLAUDE_TOGETHER_DIR
     ? `custom store (CLAUDE_TOGETHER_DIR=${process.env.CLAUDE_TOGETHER_DIR})`
     : projectDir()
-  const discovery = bootstrap
-    ? `custom bootstrap (CLAUDE_TOGETHER_BOOTSTRAP=${bootstrap.join(',')}) — peers must use the same`
-    : 'public hyperdht bootstrap nodes'
+  const discovery = describeBootstrap()
   // Whether messages arrive by themselves is not something the user can see anywhere
   // else: a project with no hooks looks exactly like a room where nobody is talking.
   const delivery = hooksStatus().summary

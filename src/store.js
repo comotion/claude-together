@@ -125,6 +125,22 @@ export class Store {
 
   getName () { return this._readIdentity().name || null }
 
+  // Where discovery bootstraps, remembered machine-wide rather than per project: it
+  // describes the network this computer is on, which does not change between checkouts.
+  // Null means the public nodes. CLAUDE_TOGETHER_BOOTSTRAP still wins for a process
+  // that sets it, so an explicit environment is never quietly overridden by a stored one.
+  getBootstrap () {
+    const stored = this._readIdentity().bootstrap
+    return Array.isArray(stored) && stored.length ? stored : null
+  }
+
+  setBootstrap (nodes) {
+    this._updateIdentity(c => {
+      if (nodes && nodes.length) c.bootstrap = nodes
+      else delete c.bootstrap
+    })
+  }
+
   setName (name) {
     this._updateIdentity(c => { c.name = name })
   }

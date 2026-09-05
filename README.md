@@ -360,6 +360,30 @@ as the address to talk to, and a name like `myhost` usually resolves to `127.0.1
 locally and to nothing at all on theirs, which leaves your session advertising a
 loopback address.
 
+**Changing it needs no restart.** `set_bootstrap` repoints discovery and applies it
+immediately, and `start_local_bootstrap` starts the cluster above and points at it in one
+step; `stop_local_bootstrap` stops it. The choice is remembered for the machine, so later
+sessions start on the same DHT without anything being exported. `CLAUDE_TOGETHER_BOOTSTRAP`
+still wins for a process that sets it, so an explicit environment is never quietly
+overridden — the stored value applies to sessions that come later.
+
+Stopping the cluster deliberately does *not* move discovery back to the public nodes.
+Doing that silently would change who a session can reach without anyone asking for it,
+so it is a separate call.
+
+### Peers on separate networks
+
+A private cluster only helps when every peer can reach it. Two people on different
+corporate networks cannot, so a LAN bootstrap does nothing for them and they need
+either the public DHT or a bootstrap both can actually reach — a host on the internet,
+or a shared overlay such as [Tailscale](https://tailscale.com), which is also the
+simpler answer to hole-punching failures generally.
+
+The public DHT is worth trying first between separate networks. It has plenty of nodes
+to coordinate a hole punch, which is exactly what a lone bootstrapper cannot do, and
+the case it struggles with — both peers behind one NAT that will not hairpin — is not
+the case two separate networks are in.
+
 To keep it up across reboots, run it under systemd as your own user:
 
 ```ini
@@ -410,6 +434,7 @@ sudo loginctl enable-linger $USER    # or it only runs while you are logged in
 - [`test/interrupts.js`](test/interrupts.js) — receiver-side interrupt opt-in
 - [`test/outbox.js`](test/outbox.js) — at-least-once retry of queued messages
 - [`test/link.js`](test/link.js) — a second working directory joining a room locally
+- [`test/bootstrap.js`](test/bootstrap.js) — repointing discovery while the session runs
 - [`test/register.js`](test/register.js) — per-project hook installation
 
 ## License

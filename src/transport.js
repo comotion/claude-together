@@ -40,6 +40,24 @@ const INVITE_TTL_MS = 15 * 60_000
 // generous headroom while still bounding a flood.
 const MAX_LINE_BYTES = 256 * 1024
 
+// One place that decides what a bootstrap list looks like, used for the environment
+// variable and for the stored setting alike. A malformed value is refused rather than
+// dropped: silently falling back to the public nodes would put this session on a
+// different DHT from its peers, which looks exactly like nobody being online.
+export function parseBootstrap (value) {
+  if (value === null || value === undefined || value === '') return undefined
+  const list = Array.isArray(value) ? value : String(value).split(',')
+  const nodes = list.map(entry => String(entry).trim()).filter(Boolean)
+  if (nodes.length === 0) return undefined
+  for (const node of nodes) {
+    if (!/^[^\s:@]+:\d+$/.test(node)) {
+      throw new Error(`bootstrap nodes must be host:port, got "${node}". ` +
+        'Use an address peers can reach, not a hostname that resolves to loopback.')
+    }
+  }
+  return nodes
+}
+
 function roomIdFor (roomKey) {
   return b4a.toString(derive(roomKey, 'claude-together-roomid').subarray(0, 8), 'hex')
 }
@@ -207,6 +225,22 @@ export class Together extends EventEmitter {
       this.retryOutbound()
     }, 30_000)
     if (this._maintenance.unref) this._maintenance.unref()
+  }
+
+  // Point discovery somewhere else without restarting Claude Code. Hyperswarm binds its
+  // bootstrap when the swarm is constructed, so the swarm is rebuilt — rooms and open
+  // rendezvous come back from the store on the way up, and peers reconnect on their own.
+  // Live connections do drop: they belong to the DHT being left behind.
+  async reconfigureBootstrap (nodes) {
+    const parsed = parseBootstrap(nodes)
+    this.store.setBootstrap(parsed || null)
+    await this.stop()
+    this.conns.clear()
+    this.roomConns.clear()
+    this.discoveries.clear()
+    this.bootstrap = parsed
+    await this.start()
+    return { bootstrap: parsed || null }
   }
 
   async stop () {
