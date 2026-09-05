@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { Together, VERSION, PKG_ROOT, parseBootstrap } from './transport.js'
+import { Together, VERSION, PKG_ROOT, parseBootstrap, parseRelay } from './transport.js'
 import { projectDir } from './scope.js'
 import { hooksStatus } from './hooks.js'
 import { hash, randomBytes, fingerprint } from './crypto.js'
@@ -26,7 +26,13 @@ import { hash, randomBytes, fingerprint } from './crypto.js'
 const store = new Store()
 const envBootstrap = parseBootstrap(process.env.CLAUDE_TOGETHER_BOOTSTRAP)
 const bootstrapPinnedByEnv = envBootstrap !== undefined
-const together = new Together({ store, bootstrap: envBootstrap ?? (store.getBootstrap() || undefined) })
+const envRelay = parseRelay(process.env.CLAUDE_TOGETHER_RELAY)
+const relayPinnedByEnv = envRelay !== undefined
+const together = new Together({
+  store,
+  bootstrap: envBootstrap ?? (store.getBootstrap() || undefined),
+  relay: envRelay ?? (parseRelay(store.getRelay()) || undefined)
+})
 
 const CLUSTER_STATE = path.join(os.homedir(), '.claude-together', 'local-bootstrap.json')
 
@@ -239,6 +245,25 @@ server.registerTool('stop_local_bootstrap', {
   )
 })
 
+server.registerTool('set_relay', {
+  title: 'Route through a relay when a direct connection fails',
+  description: 'Name a relay node to carry connections that cannot be made directly, for peers whose networks refuse to hole-punch at all. Pass the relay\'s 64-character hex public key, or omit it to stop relaying. This is a fallback, not a mode: hyperswarm tries a direct connection first every time and only falls back once the punch has actually failed, so naming a relay costs nothing while direct connections work. IMPORTANT for your user: a relay carries their traffic. Messages stay end-to-end encrypted and the relay cannot read them, but it does see that two peers are talking, how much, and when — and this project otherwise involves no third party at all. Say so before setting one. There is no relay bundled: the key must name a node you run somewhere both peers can reach, or one you have been given and trust.',
+  inputSchema: {
+    key: z.string().optional()
+      .describe('Relay public key, 64 hex characters. Omit to stop relaying.')
+  }
+}, async ({ key }) => {
+  const res = await together.reconfigureRelay(key || null)
+  const note = relayPinnedByEnv
+    ? ' NOTE: CLAUDE_TOGETHER_RELAY is set for this process, so it keeps overriding this until Claude Code restarts.'
+    : ''
+  return text(res.relay
+    ? `Connections that cannot be made directly will now be relayed through ${res.relay.slice(0, 16)}…, ` +
+      'remembered for this machine. Direct connections are still tried first and preferred; the relay only ' +
+      'carries what would otherwise fail. It learns who talks to whom and when, though not what is said.' + note
+    : `Relaying is off. A connection that cannot be made directly will simply not be made.${note}`)
+})
+
 server.registerTool('link_room', {
   title: 'Link a room you already hold in another project',
   description: 'Join a room that another project on THIS machine already belongs to, by copying its key locally. No rendezvous, no number to compare, no network: the key is already on this machine, so nothing new is granted and there is nothing to verify. Use this to add a second working directory to a room you are already in — pairing is for reaching another person, not for moving your own key between your own directories. Each project keeps its own inbox, so both sessions receive every message independently instead of competing to read it. The room\'s other members are told that another of your sessions has joined.',
@@ -338,10 +363,14 @@ server.registerTool('status', {
     ? `custom store (CLAUDE_TOGETHER_DIR=${process.env.CLAUDE_TOGETHER_DIR})`
     : projectDir()
   const discovery = describeBootstrap()
+  const relay = together.relay
+    ? `via ${b4a.toString(together.relay, 'hex').slice(0, 16)}… when a direct connection fails ` +
+      `(from ${relayPinnedByEnv ? 'CLAUDE_TOGETHER_RELAY' : 'stored setting'})`
+    : 'none — a connection that cannot be made directly is simply not made'
   // Whether messages arrive by themselves is not something the user can see anywhere
   // else: a project with no hooks looks exactly like a room where nobody is talking.
   const delivery = hooksStatus().summary
-  return text(JSON.stringify({ scope, discovery, delivery, ...together.status() }, null, 2))
+  return text(JSON.stringify({ scope, discovery, relay, delivery, ...together.status() }, null, 2))
 })
 
 server.registerTool('set_display_name', {

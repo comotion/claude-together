@@ -58,6 +58,19 @@ export function parseBootstrap (value) {
   return nodes
 }
 
+// A relay is named by the public key of a node both sides can reach. Hyperswarm only
+// uses it once a direct connection has actually failed, so this changes nothing until
+// the hole punch gives up.
+export function parseRelay (value) {
+  if (value === null || value === undefined || value === '') return undefined
+  const hex = String(value).trim().toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new Error(`a relay is a 64-character hex public key, got "${String(value).slice(0, 32)}". ` +
+      'It names the node that will carry the connection, not an address.')
+  }
+  return b4a.from(hex, 'hex')
+}
+
 function roomIdFor (roomKey) {
   return b4a.toString(derive(roomKey, 'claude-together-roomid').subarray(0, 8), 'hex')
 }
@@ -135,10 +148,11 @@ function signable (m) {
 // each side proves knowledge of its keys with nonce-bound MACs, and re-proves whenever
 // it learns a new key (e.g. right after a pairing grant hands over the room key).
 export class Together extends EventEmitter {
-  constructor ({ store, bootstrap = undefined } = {}) {
+  constructor ({ store, bootstrap = undefined, relay = undefined } = {}) {
     super()
     this.store = store
     this.bootstrap = bootstrap
+    this.relay = relay
     // Short per-process session id: distinguishes two sessions running in the
     // same project on the same machine (name, host, and label all match there).
     this.sid = b4a.toString(randomBytes(3), 'hex')
@@ -170,9 +184,12 @@ export class Together extends EventEmitter {
     // Ephemeral keypair per process: several sessions on one machine (or several of
     // your machines) each show up as their own peer in the room mesh. Trust comes
     // from room keys, not from this connection identity.
+    // relayThrough is consulted only after a direct connection fails, or when this
+    // node's NAT randomizes ports, so naming a relay costs nothing while punching works.
     this.swarm = new Hyperswarm({
       keyPair: hypercoreCrypto.keyPair(),
-      bootstrap: this.bootstrap
+      bootstrap: this.bootstrap,
+      ...(this.relay ? { relayThrough: this.relay } : {})
     })
     this.swarm.on('connection', conn => this._onConnection(conn))
 
@@ -234,13 +251,29 @@ export class Together extends EventEmitter {
   async reconfigureBootstrap (nodes) {
     const parsed = parseBootstrap(nodes)
     this.store.setBootstrap(parsed || null)
+    await this._rebuild(() => { this.bootstrap = parsed })
+    return { bootstrap: parsed || null }
+  }
+
+  // Route through a relay when a direct connection cannot be made. Hyperswarm falls
+  // back to it only on a failed punch, so this is a safety net rather than a mode.
+  async reconfigureRelay (key) {
+    const parsed = parseRelay(key)
+    this.store.setRelay(parsed ? b4a.toString(parsed, 'hex') : null)
+    await this._rebuild(() => { this.relay = parsed })
+    return { relay: parsed ? b4a.toString(parsed, 'hex') : null }
+  }
+
+  // Swarm settings are bound at construction, so changing one means building a new
+  // swarm. Rooms and open rendezvous come back from the store on the way up; live
+  // connections drop, because they belong to the setup being replaced.
+  async _rebuild (apply) {
     await this.stop()
     this.conns.clear()
     this.roomConns.clear()
     this.discoveries.clear()
-    this.bootstrap = parsed
+    apply()
     await this.start()
-    return { bootstrap: parsed || null }
   }
 
   async stop () {

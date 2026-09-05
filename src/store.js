@@ -134,6 +134,21 @@ export class Store {
     return Array.isArray(stored) && stored.length ? stored : null
   }
 
+  // Public key of a node that will carry connections which cannot be made directly.
+  // Machine-wide for the same reason as the bootstrap: it is a property of the network
+  // this computer sits on.
+  getRelay () {
+    const stored = this._readIdentity().relay
+    return typeof stored === 'string' && /^[0-9a-f]{64}$/.test(stored) ? stored : null
+  }
+
+  setRelay (key) {
+    this._updateIdentity(c => {
+      if (key) c.relay = key
+      else delete c.relay
+    })
+  }
+
   setBootstrap (nodes) {
     this._updateIdentity(c => {
       if (nodes && nodes.length) c.bootstrap = nodes

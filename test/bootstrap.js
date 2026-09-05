@@ -1,4 +1,4 @@
-// Discovery can be repointed while the session runs. Restarting Claude Code to change
+// Discovery and relaying can both be repointed while the session runs. Restarting Claude Code to change
 // a bootstrap is a poor trade when the setting is one line, and the case it exists for
 // — peers who can find each other but not connect — is discovered mid-conversation.
 import assert from 'node:assert'
@@ -100,9 +100,39 @@ await assert.rejects(() => alice.reconfigureBootstrap(['not-a-node']), /host:por
 assert.deepEqual(alice.bootstrap, netA.bootstrap.map(b => `${b.host}:${b.port}`),
   'a refused change must leave discovery where it was')
 
+console.log('9. A relay key is validated, and only accepted as a key…')
+const { parseRelay } = await import('../src/transport.js')
+const relayKey = 'a'.repeat(64)
+assert.ok(parseRelay(relayKey).equals(Buffer.from(relayKey, 'hex')))
+assert.equal(parseRelay(''), undefined)
+assert.equal(parseRelay(null), undefined)
+// The likely mistake is giving an address, since everything else here is one.
+assert.throws(() => parseRelay('192.168.1.10:49737'), /hex public key/)
+assert.throws(() => parseRelay('a'.repeat(63)), /hex public key/)
+
+console.log('10. Setting a relay takes effect live and is remembered…')
+await alice.reconfigureRelay(relayKey)
+assert.ok(alice.swarm.relayThrough, 'the rebuilt swarm must carry the relay')
+assert.equal(alice.store.getRelay(), relayKey)
+assert.deepEqual(new Store(aliceDir).getRelay(), relayKey, 'a later session picks it up')
+// Naming a relay must not disturb rooms or the connection that already works.
+assert.ok(alice.store.roomByName('moving-room'), 'rooms survive the rebuild')
+assert.ok(await linked(alice, 'moving-room'), 'a direct connection is still used')
+
+console.log('11. Clearing the relay stops relaying…')
+await alice.reconfigureRelay(null)
+assert.equal(alice.relay, undefined)
+assert.equal(alice.store.getRelay(), null)
+assert.ok(!alice.swarm.relayThrough, 'the rebuilt swarm must not carry a relay')
+
+console.log('12. A bad relay key is refused and changes nothing…')
+await alice.reconfigureRelay(relayKey)
+await assert.rejects(() => alice.reconfigureRelay('nonsense'), /hex public key/)
+assert.ok(alice.relay, 'a refused change must leave relaying where it was')
+
 await alice.stop()
 await bob.stop()
 await netA.destroy()
 await netB.destroy()
-console.log('\nAll bootstrap reconfiguration tests passed.')
+console.log('\nAll bootstrap and relay tests passed.')
 process.exit(0)

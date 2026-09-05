@@ -89,6 +89,7 @@ Or just talk to Claude in any session:
 | "show the history of `name`" | Re-reads the recent room log (last 200 msgs / 7 days) without touching your unread inbox. |
 | "set my display name to …" | The name shown on your messages. |
 | "link room `name`" | Adds *this* project to a room another project on this machine is already in, by copying the key locally. No pairing, no network. |
+| "relay through `key`" | Routes connections that cannot be made directly through a named relay. Off by default; a relay sees who talks to whom, though not what is said. |
 | "leave room `name`" | Deletes the room key, stops announcing on the DHT, and closes the room's connections. |
 
 **Version mismatches are detected on connect.** Sessions exchange their
@@ -370,6 +371,24 @@ overridden — the stored value applies to sessions that come later.
 Stopping the cluster deliberately does *not* move discovery back to the public nodes.
 Doing that silently would change who a session can reach without anyone asking for it,
 so it is a separate call.
+
+### When a direct connection is impossible: relaying
+
+Some networks refuse to hole-punch at all, and no bootstrap fixes that — discovery was
+never the hard part, the connection is. `set_relay` names a node to carry connections
+that cannot be made directly, by its 64-character hex public key.
+
+It is a fallback rather than a mode. Hyperswarm tries a direct connection every time and
+only falls back once the punch has actually failed, so naming a relay costs nothing while
+direct connections work.
+
+**What it gives up.** A relay carries your traffic. Messages stay end-to-end encrypted
+and it cannot read them, but it learns that two peers are talking, how much, and when —
+and this project otherwise involves no third party at all. That is a real change to "no
+relay, nothing to host", so it is off by default and has to be turned on deliberately.
+
+No relay is bundled. The key must name a node you run somewhere both peers can reach, or
+one you have been given and trust.
 
 ### Peers on separate networks
 
